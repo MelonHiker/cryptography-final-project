@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Keystroke Dynamics Collector — 行為生物辨識資料收集</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Sora:wght@300;400;600;700;800&display=swap');
+
+  :root {
+    --bg-0: #0a0e1a;
+    --bg-1: #0f1525;
+    --bg-2: #161d33;
+    --bg-card: #131a2e;
+    --border: #243049;
+    --border-glow: #2dd4a7;
+    --text-0: #e8edf7;
+    --text-1: #9aa7c0;
+    --text-2: #5f6e8c;
+    --accent: #2dd4a7;       /* owner / green */
+    --accent-dim: #1a8a6c;
+    --cyan: #38bdf8;
+    --owner: #2dd4a7;
+    --imposter: #f59e0b;
+    --bot: #e11d6f;
+    --danger: #ef4444;
+    --shadow: 0 8px 32px rgba(0,0,0,0.4);
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Sora', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--sans);
+    background:
+      radial-gradient(ellipse 80% 60% at 85% -10%, rgba(56,189,248,0.10), transparent 60%),
+      radial-gradient(ellipse 70% 50% at 10% 110%, rgba(45,212,167,0.08), transparent 60%),
+      var(--bg-0);
+    color: var(--text-0);
+    min-height: 100vh;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 0 0 80px;
+  }
+
+  .topbar {
+    height: 3px;
+    background: linear-gradient(90deg, var(--cyan), var(--accent), var(--cyan));
+    width: 100%;
+  }
+
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+
+  header { padding: 40px 0 28px; }
+  header .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  header h1 {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+  }
+  header h1 .hl { color: var(--accent); }
+  header p.sub {
+    color: var(--text-1);
+    margin-top: 10px;
+    font-size: 15px;
+    max-width: 640px;
+  }
+
+  /* ── Label selector ── */
+  .panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+  }
+  .panel-title {
+    font-size: 13px;
+    font-family: var(--mono);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-2);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-title::before {
+    content: '';
+    width: 3px; height: 14px;
+    background: var(--cyan);
+    border-radius: 2px;
+  }
+
+  .meta-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+  .field { flex: 1; min-width: 180px; }
+  .field label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-1);
+    margin-bottom: 6px;
+    font-family: var(--mono);
+  }
+  .field input, .field select {
+    width: 100%;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    color: var(--text-0);
+    padding: 11px 13px;
+    font-size: 14px;
+    font-family: var(--sans);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .field input:focus, .field select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(45,212,167,0.12);
+  }
+
+  .label-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 4px; }
+  .label-btn {
+    background: var(--bg-1);
+    border: 1.5px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 12px;
+    cursor: pointer;
+    text-align: center;
+    transition: all .18s;
+    position: relative;
+    overflow: hidden;
+  }
+  .label-btn .lname { font-weight: 700; font-size: 15px; margin-bottom: 3px; }
+  .label-btn .ldesc { font-size: 11px; color: var(--text-2); font-family: var(--mono); }
+  .label-btn:hover { border-color: var(--text-2); transform: translateY(-1px); }
+  .label-btn.active { background: var(--bg-2); }
+  .label-btn[data-label="owner"].active   { border-color: var(--owner);   box-shadow: 0 0 0 3px rgba(45,212,167,.15); }
+  .label-btn[data-label="imposter"].active{ border-color: var(--imposter);box-shadow: 0 0 0 3px rgba(245,158,11,.15); }
+  .label-btn[data-label="bot"].active      { border-color: var(--bot);     box-shadow: 0 0 0 3px rgba(225,29,111,.15); }
+  .label-btn[data-label="owner"] .lname.dot::before   { background: var(--owner); }
+  .label-btn[data-label="imposter"] .lname.dot::before{ background: var(--imposter); }
+  .label-btn[data-label="bot"] .lname.dot::before      { background: var(--bot); }
+
+  /* ── Target password display ── */
+  .target-box {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--bg-1);
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-top: 14px;
+  }
+  .target-box .tlabel { font-size: 12px; color: var(--text-2); font-family: var(--mono); }
+  .target-box .tval {
+    font-family: var(--mono);
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--cyan);
+    letter-spacing: 0.05em;
+  }
+  .target-box .edit-link {
+    margin-left: auto; font-size: 12px; color: var(--text-2);
+    background: none; border: none; cursor: pointer; font-family: var(--mono);
+    text-decoration: underline; text-underline-offset: 3px;
+  }
+  .target-box .edit-link:hover { color: var(--accent); }
+
+  /* ── Typing area ── */
+  .type-stage { text-align: center; padding: 8px 0 4px; }
+  .type-prompt { color: var(--text-1); font-size: 14px; margin-bottom: 16px; }
+  .type-prompt b { color: var(--text-0); font-family: var(--mono); }
+
+  #pwInput {
+    width: 100%;
+    max-width: 520px;
+    margin: 0 auto;
+    display: block;
+    background: var(--bg-0);
+    border: 2px solid var(--border);
+    border-radius: 14px;
+    color: var(--text-0);
+    padding: 20px 22px;
+    font-size: 22px;
+    font-family: var(--mono);
+    letter-spacing: 0.12em;
+    text-align: center;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  #pwInput:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px rgba(45,212,167,.12); }
+  #pwInput.match  { border-color: var(--owner); }
+  #pwInput.mismatch { border-color: var(--imposter); }
+  #pwInput.error  { border-color: var(--danger); animation: shake .3s; }
+
+  @keyframes shake {
+    0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)}
+  }
+
+  .live-feedback {
+    font-family: var(--mono); font-size: 13px; margin-top: 14px;
+    min-height: 20px; color: var(--text-2);
+  }
+  .live-feedback.ok { color: var(--owner); }
+  .live-feedback.warn { color: var(--imposter); }
+  .live-feedback.bad { color: var(--danger); }
+
+  .hint-row {
+    display: flex; justify-content: center; gap: 24px; margin-top: 18px;
+    font-size: 12px; color: var(--text-2); font-family: var(--mono); flex-wrap: wrap;
+  }
+  .hint-row kbd {
+    background: var(--bg-2); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 5px; padding: 2px 7px; font-size: 11px; color: var(--text-1);
+  }
+
+  /* ── Stats bar ── */
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; text-align: center;
+  }
+  .stat .num { font-size: 28px; font-weight: 800; font-family: var(--mono); line-height: 1; }
+  .stat .lbl { font-size: 11px; color: var(--text-2); margin-top: 7px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+  .stat.owner .num { color: var(--owner); }
+  .stat.imposter .num { color: var(--imposter); }
+  .stat.bot .num { color: var(--bot); }
+  .stat.total .num { color: var(--cyan); }
+
+  .progress-wrap { margin-top: 16px; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-2); font-family: var(--mono); margin-bottom: 7px; }
+  .progress-track { height: 8px; background: var(--bg-0); border-radius: 6px; overflow: hidden; }
+  .progress-fill { height: 100%; width: 0%; border-radius: 6px; transition: width .4s ease; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); }
+
+  /* ── Action buttons ── */
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn {
+    font-family: var(--sans); font-weight: 600; font-size: 14px;
+    border-radius: 10px; padding: 12px 20px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg-2); color: var(--text-0);
+    transition: all .15s; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .btn:hover { border-color: var(--text-2); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn-primary { background: var(--accent); color: #04130d; border-color: var(--accent); font-weight: 700; }
+  .btn-primary:hover { background: #34e8b8; border-color: #34e8b8; }
+  .btn-danger { color: var(--danger); border-color: rgba(239,68,68,.3); }
+  .btn-danger:hover { background: rgba(239,68,68,.1); border-color: var(--danger); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+
+  /* ── Recent log table ── */
+  .log-toolbar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border);
+  }
+  .log-toolbar .spacer { flex: 1; }
+  .log-toolbar select {
+    background: var(--bg-1); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-0); padding: 7px 11px; font-size: 13px; font-family: var(--mono);
+    cursor: pointer;
+  }
+  .log-toolbar select:focus { outline: none; border-color: var(--accent); }
+  .log-toolbar .sel-info { font-size: 12px; color: var(--text-2); font-family: var(--mono); }
+  .log-toolbar .sel-info b { color: var(--cyan); }
+  .btn-sm {
+    font-family: var(--sans); font-weight: 600; font-size: 13px; border-radius: 8px;
+    padding: 7px 14px; cursor: pointer; border: 1px solid rgba(239,68,68,.3);
+    background: var(--bg-2); color: var(--danger); transition: all .15s;
+  }
+  .btn-sm:hover:not(:disabled) { background: rgba(239,68,68,.1); border-color: var(--danger); }
+  .btn-sm:disabled { opacity: .35; cursor: not-allowed; }
+
+  .chk { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); vertical-align: middle; }
+  .log-table tr.row-selected td { background: rgba(56,189,248,.07); }
+  .col-chk { width: 36px; text-align: center; }
+
+  .log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .log-table th {
+    text-align: left; color: var(--text-2); font-family: var(--mono); font-weight: 500;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    padding: 8px 10px; border-bottom: 1px solid var(--border);
+  }
+  .log-table td { padding: 9px 10px; border-bottom: 1px solid rgba(36,48,73,.5); font-family: var(--mono); color: var(--text-1); }
+  .log-table tr:last-child td { border-bottom: none; }
+  .tag { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .tag.owner    { background: rgba(45,212,167,.15); color: var(--owner); }
+  .tag.imposter { background: rgba(245,158,11,.15); color: var(--imposter); }
+  .tag.bot      { background: rgba(225,29,111,.15); color: var(--bot); }
+  .empty-log { text-align: center; color: var(--text-2); padding: 28px; font-family: var(--mono); font-size: 13px; }
+
+  .footnote { color: var(--text-2); font-size: 12px; font-family: var(--mono); text-align: center; margin-top: 28px; line-height: 1.7; }
+
+  .toast {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(120px);
+    background: var(--bg-2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    color: var(--text-0); padding: 13px 20px; border-radius: 10px; box-shadow: var(--shadow);
+    font-size: 14px; transition: transform .35s cubic-bezier(.2,.9,.3,1.3); z-index: 100; max-width: 90vw;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast.err { border-left-color: var(--danger); }
+
+  @media (max-width: 640px) {
+    .stats-grid { grid-template-columns: repeat(2,1fr); }
+    .label-group { grid-template-columns: 1fr; }
+    header h1 { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="topbar"></div>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Behavioral Biometrics · Data Collection</div>
+    <h1>Keystroke Dynamics <span class="hl">Collector</span></h1>
+    <p class="sub">重複輸入同一組固定密碼以建立打字行為資料集。系統以 <b style="color:var(--cyan);font-family:var(--mono)">performance.now()</b> 記錄每個按鍵的 keydown / keyup 高精度時間戳,供 AI 組訓練 Owner / Imposter / Bot 三分類模型。</p>
+  </header>
+
+  <!-- Setup panel -->
+  <div class="panel">
+    <div class="panel-title">Session Setup</div>
+    <div class="meta-row">
+      <div class="field">
+        <label>受試者 ID (Subject ID)</label>
+        <input id="subjectId" type="text" placeholder="例如 alice / bob01" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>目前標籤 (Active Label)</label>
+        <input id="activeLabelDisplay" type="text" value="owner" readonly style="color:var(--owner);font-family:var(--mono);font-weight:700">
+      </div>
+    </div>
+
+    <div class="label-group" id="labelGroup">
+      <div class="label-btn active" data-label="owner">
+        <div class="lname">Owner 本人</div>
+        <div class="ldesc">authorized user</div>
+      </div>
+      <div class="label-btn" data-label="imposter">
+        <div class="lname">Imposter 冒充者</div>
+        <div class="ldesc">human intruder</div>
+      </div>
+      <div class="label-btn" data-label="bot">
+        <div class="lname">Bot 機器人</div>
+        <div class="ldesc">automated script</div>
+      </div>
+    </div>
+
+    <div class="target-box">
+      <span class="tlabel">TARGET PASSWORD</span>
+      <span class="tval" id="targetVal">Crypto@2025</span>
+      <button class="edit-link" id="editTarget">更改</button>
+    </div>
+  </div>
+
+  <!-- Typing panel -->
+  <div class="panel">
+    <div class="panel-title">Capture Stage</div>
+    <div class="type-stage">
+      <div class="type-prompt">請完整輸入目標密碼,然後按 <b>Enter</b> 送出這一筆</div>
+      <input id="pwInput" type="text" autocomplete="off" autocorrect="off" autocapitalize="off"
+             spellcheck="false" placeholder="在此輸入…">
+      <div class="live-feedback" id="liveFeedback">等待輸入…</div>
+      <div class="hint-row">
+        <span><kbd>Enter</kbd> 送出</span>
+        <span><kbd>Esc</kbd> 清空重打</span>
+        <span>輸入完全相符才會儲存</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats panel -->
+  <div class="panel">
+    <div class="panel-title">Dataset Progress</div>
+    <div class="stats-grid">
+      <div class="stat owner"><div class="num" id="cntOwner">0</div><div class="lbl">Owner</div></div>
+      <div class="stat imposter"><div class="num" id="cntImposter">0</div><div class="lbl">Imposter</div></div>
+      <div class="stat bot"><div class="num" id="cntBot">0</div><div class="lbl">Bot</div></div>
+      <div class="stat total"><div class="num" id="cntTotal">0</div><div class="lbl">Total</div></div>
+    </div>
+    <div class="progress-wrap">
+      <div class="progress-label">
+        <span>目前標籤 (<span id="progLabel">owner</span>) 進度</span>
+        <span><span id="progNow">0</span> / <span id="progGoal">100</span></span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="progFill"></div></div>
+    </div>
+  </div>
+
+  <!-- Export / control panel -->
+  <div class="panel">
+    <div class="panel-title">Export &amp; Control</div>
+    <div class="actions">
+      <button class="btn btn-primary" id="exportWide">⬇ 導出 Wide CSV（含特徵）</button>
+      <button class="btn" id="exportLong">⬇ 導出 Long CSV（原始事件）</button>
+      <button class="btn" id="exportJson">⬇ 導出 JSON（完整備份）</button>
+      <button class="btn" id="importBtn">⬆ 導入 JSON（合併）</button>
+      <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+      <button class="btn btn-danger" id="undoLast">↩ 刪除上一筆</button>
+      <button class="btn btn-danger" id="deleteSelected">✕ 刪除選取 (0)</button>
+      <button class="btn btn-danger" id="clearAll">🗑 清空全部</button>
+    </div>
+  </div>
+
+  <!-- Recent log -->
+  <div class="panel">
+    <div class="panel-title">Recent Samples</div>
+    <div id="logContainer">
+      <div class="empty-log">尚無資料。選好標籤後開始輸入吧。</div>
+    </div>
+  </div>
+
+  <div class="footnote">
+    資料僅暫存於瀏覽器記憶體（重新整理會清空）。記得定期導出 CSV。<br>
+    時間單位：毫秒 (ms)，精度來自 performance.now()。鍵碼同時記錄 event.key 與 event.code。
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+//  Keystroke Dynamics Collector  —  pure-frontend, no backend
+//  All data kept in-memory (no localStorage per artifact rules);
+//  export to CSV/JSON before refreshing.
+// ============================================================
+
+const CONFIG = {
+  goalPerLabel: 100,        // target samples per label
+};
+
+const state = {
+  targetPassword: "Crypto@2025",
+  activeLabel: "owner",
+  samples: [],              // array of completed sample objects
+  // per-sample capture buffer
+  capturing: false,
+  events: [],               // {type:'down'|'up', key, code, t}
+  startTime: null,
+  hadCorrection: false,     // pressed backspace/delete during this attempt
+};
+
+// ---------- DOM refs ----------
+const $ = (id) => document.getElementById(id);
+const pwInput = $('pwInput');
+const liveFeedback = $('liveFeedback');
+const toast = $('toast');
+
+// ---------- Label selection ----------
+$('labelGroup').addEventListener('click', (e) => {
+  const btn = e.target.closest('.label-btn');
+  if (!btn) return;
+  document.querySelectorAll('.label-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  state.activeLabel = btn.dataset.label;
+  const colorMap = { owner: 'var(--owner)', imposter: 'var(--imposter)', bot: 'var(--bot)' };
+  $('activeLabelDisplay').value = state.activeLabel;
+  $('activeLabelDisplay').style.color = colorMap[state.activeLabel];
+  resetCapture();
+  updateProgress();
+});
+
+// ---------- Target password editing ----------
+$('editTarget').addEventListener('click', () => {
+  const next = prompt("設定目標密碼（所有受試者都打同一組）：", state.targetPassword);
+  if (next && next.length > 0) {
+    state.targetPassword = next;
+    $('targetVal').textContent = next;
+    resetCapture();
+    showToast("目標密碼已更新為 " + next);
+  }
+});
+
+// ---------- Keystroke capture ----------
+// We capture on the input element. performance.now() gives sub-ms monotonic time.
+pwInput.addEventListener('keydown', (e) => {
+  // Esc = reset current attempt
+  if (e.key === 'Escape') { e.preventDefault(); resetCapture(); pwInput.value=''; return; }
+
+  // Enter = submit attempt
+  if (e.key === 'Enter') { e.preventDefault(); submitAttempt(); return; }
+
+  // Track corrections (these corrupt timing for owner/imposter, but allowed for bot)
+  if (e.key === 'Backspace' || e.key === 'Delete') state.hadCorrection = true;
+
+  const t = performance.now();
+  if (!state.capturing) { state.capturing = true; state.startTime = t; }
+  state.events.push({ type: 'down', key: e.key, code: e.code, t: round(t - state.startTime) });
+});
+
+pwInput.addEventListener('keyup', (e) => {
+  if (e.key === 'Enter' || e.key === 'Escape') return;
+  if (!state.capturing) return;
+  const t = performance.now();
+  state.events.push({ type: 'up', key: e.key, code: e.code, t: round(t - state.startTime) });
+});
+
+pwInput.addEventListener('input', () => updateLiveFeedback());
+
+// ---------- Live feedback ----------
+function updateLiveFeedback() {
+  const val = pwInput.value;
+  const target = state.targetPassword;
+  pwInput.classList.remove('match', 'mismatch', 'error');
+  if (val.length === 0) {
+    liveFeedback.textContent = '等待輸入…';
+    liveFeedback.className = 'live-feedback';
+    return;
+  }
+  if (target.startsWith(val)) {
+    if (val === target) {
+      pwInput.classList.add('match');
+      liveFeedback.textContent = '✓ 完全相符 — 按 Enter 送出';
+      liveFeedback.className = 'live-feedback ok';
+    } else {
+      liveFeedback.textContent = `輸入中… (${val.length}/${target.length})`;
+      liveFeedback.className = 'live-feedback';
+    }
+  } else {
+    pwInput.classList.add('mismatch');
+    liveFeedback.textContent = '⚠ 與目標密碼不符（送出時將被拒絕）';
+    liveFeedback.className = 'live-feedback warn';
+  }
+}
+
+// ---------- Submit one attempt ----------
+function submitAttempt() {
+  const val = pwInput.value;
+  const target = state.targetPassword;
+
+  // Validation: must match target exactly
+  if (val !== target) {
+    pwInput.classList.add('error');
+    setTimeout(() => pwInput.classList.remove('error'), 320);
+    liveFeedback.textContent = '✗ 輸入與目標密碼不符 — 這筆不會儲存';
+    liveFeedback.className = 'live-feedback bad';
+    return;
+  }
+
+  // For owner/imposter: corrections corrupt the timing => reject.
+  // For bot: allow (bots may behave oddly; over-filtering distorts bot data).
+  if (state.hadCorrection && state.activeLabel !== 'bot') {
+    pwInput.classList.add('error');
+    setTimeout(() => pwInput.classList.remove('error'), 320);
+    liveFeedback.textContent = '✗ 偵測到修改（Backspace/Delete）— 為保資料乾淨,這筆作廢,請重打';
+    liveFeedback.className = 'live-feedback bad';
+    resetCapture();
+    pwInput.value = '';
+    return;
+  }
+
+  if (state.events.length === 0) {
+    showToast("沒有捕捉到按鍵事件,請重打", true);
+    return;
+  }
+
+  // Build sample
+  const sampleIndexForLabel = state.samples.filter(s => s.label === state.activeLabel).length + 1;
+  const features = computeFeatures(state.events, target);
+  const sample = {
+    sample_id: 's' + Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+    subject_id: $('subjectId').value.trim() || 'anonymous',
+    label: state.activeLabel,
+    attempt_no: sampleIndexForLabel,        // n-th attempt for this label (fatigue analysis)
+    password: target,
+    timestamp_iso: new Date().toISOString(),
+    user_agent: navigator.userAgent,
+    platform: navigator.platform || '',
+    total_time_ms: features.totalTime,
+    had_correction: state.hadCorrection,
+    events: state.events.slice(),            // raw events (long format source)
+    features: features,                      // computed features (wide format source)
+  };
+
+  state.samples.push(sample);
+  renderLog();
+  updateStats();
+  updateProgress();
+
+  // reset for next attempt
+  resetCapture();
+  pwInput.value = '';
+  pwInput.focus();
+  showToast(`已儲存 ${state.activeLabel} 第 ${sampleIndexForLabel} 筆 ✓`);
+
+  // Goal reached: fire a one-time alert exactly when we hit the target count.
+  // Does NOT auto-switch label; you stay on the same label and can keep typing.
+  if (sampleIndexForLabel === CONFIG.goalPerLabel) {
+    setTimeout(() => {
+      alert(`✓ 標籤「${state.activeLabel}」已收集滿 ${CONFIG.goalPerLabel} 筆！\n\n` +
+            `你可以：\n` +
+            `· 切換到下一個標籤繼續收集\n` +
+            `· 或記得先導出 CSV 備份\n\n` +
+            `（仍可繼續在此標籤輸入，超過 ${CONFIG.goalPerLabel} 筆也不會再提示）`);
+    }, 100);
+  }
+}
+
+// ---------- Feature engineering ----------
+// Hold time  = up(i)   - down(i)            (per key)
+// Flight time(down-down) = down(i+1) - down(i)
+// Flight time(up-down)   = down(i+1) - up(i)   (the def used in slide p.4)
+function computeFeatures(events, target) {
+  // Pair downs with their matching ups in press order.
+  const downs = events.filter(e => e.type === 'down');
+  const ups = events.filter(e => e.type === 'up');
+
+  // Match each down to the next up with the same code (simple FIFO per code)
+  const upQueue = {};
+  ups.forEach(u => { (upQueue[u.code] = upQueue[u.code] || []).push(u); });
+
+  const keys = [];      // ordered key records
+  downs.forEach(d => {
+    const q = upQueue[d.code];
+    let matchUp = null;
+    if (q && q.length) {
+      // pick the first up after this down
+      const idx = q.findIndex(u => u.t >= d.t);
+      if (idx !== -1) { matchUp = q[idx]; q.splice(idx, 1); }
+      else { matchUp = q.shift(); }
+    }
+    keys.push({
+      key: d.key, code: d.code,
+      down: d.t,
+      up: matchUp ? matchUp.t : null,
+      hold: matchUp ? round(matchUp.t - d.t) : null,
+    });
+  });
+
+  // Flight times between consecutive keys (in press order)
+  const flightUD = [];   // up(i) -> down(i+1)
+  const flightDD = [];   // down(i) -> down(i+1)
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (keys[i].up != null) flightUD.push(round(keys[i+1].down - keys[i].up));
+    flightDD.push(round(keys[i+1].down - keys[i].down));
+  }
+
+  const holds = keys.map(k => k.hold).filter(h => h != null);
+  const totalTime = keys.length ? round((keys[keys.length-1].up ?? keys[keys.length-1].down) - keys[0].down) : 0;
+
+  return {
+    n_keys: keys.length,
+    keys: keys,
+    holds: holds,
+    flight_ud: flightUD,
+    flight_dd: flightDD,
+    hold_mean: mean(holds), hold_std: std(holds),
+    flight_ud_mean: mean(flightUD), flight_ud_std: std(flightUD),
+    flight_dd_mean: mean(flightDD), flight_dd_std: std(flightDD),
+    totalTime: totalTime,
+  };
+}
+
+// ---------- Stats math ----------
+function mean(a){ return a.length ? round(a.reduce((x,y)=>x+y,0)/a.length) : 0; }
+function std(a){ if(a.length<2) return 0; const m=a.reduce((x,y)=>x+y,0)/a.length; return round(Math.sqrt(a.reduce((s,v)=>s+(v-m)**2,0)/a.length)); }
+function round(n){ return Math.round(n*1000)/1000; }
+
+// ---------- Reset capture buffer ----------
+function resetCapture() {
+  state.capturing = false;
+  state.events = [];
+  state.startTime = null;
+  state.hadCorrection = false;
+  pwInput.classList.remove('match','mismatch','error');
+  liveFeedback.textContent = '等待輸入…';
+  liveFeedback.className = 'live-feedback';
+}
+
+// ---------- UI updates ----------
+function updateStats() {
+  const c = { owner:0, imposter:0, bot:0 };
+  state.samples.forEach(s => c[s.label]++);
+  $('cntOwner').textContent = c.owner;
+  $('cntImposter').textContent = c.imposter;
+  $('cntBot').textContent = c.bot;
+  $('cntTotal').textContent = state.samples.length;
+}
+
+function updateProgress() {
+  const n = state.samples.filter(s => s.label === state.activeLabel).length;
+  const goal = CONFIG.goalPerLabel;
+  $('progLabel').textContent = state.activeLabel;
+  $('progNow').textContent = n;
+  $('progGoal').textContent = goal;
+  $('progFill').style.width = Math.min(100, (n/goal)*100) + '%';
+}
+
+// selection + view state for the log
+const logView = { filter: 'all', showAll: false, selected: new Set() };
+
+function getVisibleSamples() {
+  let list = state.samples;
+  if (logView.filter !== 'all') list = list.filter(s => s.label === logView.filter);
+  // newest first
+  list = list.slice().reverse();
+  if (!logView.showAll) list = list.slice(0, 8);
+  return list;
+}
+
+function renderLog() {
+  const cont = $('logContainer');
+  if (state.samples.length === 0) {
+    cont.innerHTML = '<div class="empty-log">尚無資料。選好標籤後開始輸入吧。</div>';
+    // prune any stale selections
+    logView.selected.clear();
+    updateSelInfo();
+    return;
+  }
+
+  const visible = getVisibleSamples();
+  const totalMatching = (logView.filter === 'all')
+    ? state.samples.length
+    : state.samples.filter(s => s.label === logView.filter).length;
+
+  // toolbar
+  let html = `<div class="log-toolbar">
+      <select id="logFilter">
+        <option value="all"${logView.filter==='all'?' selected':''}>全部 (${state.samples.length})</option>
+        <option value="owner"${logView.filter==='owner'?' selected':''}>Owner</option>
+        <option value="imposter"${logView.filter==='imposter'?' selected':''}>Imposter</option>
+        <option value="bot"${logView.filter==='bot'?' selected':''}>Bot</option>
+      </select>
+      <select id="logShow">
+        <option value="recent"${!logView.showAll?' selected':''}>只顯示最近 8 筆</option>
+        <option value="all"${logView.showAll?' selected':''}>顯示全部 (${totalMatching})</option>
+      </select>
+      <button class="btn-sm" id="selectVisible">勾選顯示中</button>
+      <button class="btn-sm" id="clearSelection">取消勾選</button>
+      <div class="spacer"></div>
+      <span class="sel-info">已選 <b id="selCount">${logView.selected.size}</b> 筆</span>
+    </div>`;
+
+  html += '<table class="log-table"><thead><tr>' +
+    '<th class="col-chk"><input type="checkbox" class="chk" id="chkAll"></th>' +
+    '<th>#</th><th>Subject</th><th>Label</th><th>Keys</th>' +
+    '<th>Hold μ</th><th>Flight μ</th><th>Total(ms)</th><th>Time</th>' +
+    '</tr></thead><tbody>';
+
+  visible.forEach((s) => {
+    const idx = state.samples.indexOf(s) + 1;
+    const checked = logView.selected.has(s.sample_id);
+    html += `<tr class="${checked?'row-selected':''}">
+      <td class="col-chk"><input type="checkbox" class="chk row-chk" data-id="${s.sample_id}"${checked?' checked':''}></td>
+      <td>${idx}</td>
+      <td>${escapeHtml(s.subject_id)}</td>
+      <td><span class="tag ${s.label}">${s.label}</span></td>
+      <td>${s.features.n_keys}</td>
+      <td>${s.features.hold_mean}</td>
+      <td>${s.features.flight_ud_mean}</td>
+      <td>${s.total_time_ms}</td>
+      <td>${new Date(s.timestamp_iso).toLocaleTimeString()}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  if (!logView.showAll && totalMatching > 8) {
+    html += `<div class="empty-log" style="padding:14px">還有 ${totalMatching-8} 筆未顯示 — 切換到「顯示全部」即可勾選。</div>`;
+  }
+  cont.innerHTML = html;
+
+  wireLogControls();
+  syncChkAll();
+  updateSelInfo();
+}
+
+function wireLogControls() {
+  const filterEl = $('logFilter');
+  const showEl = $('logShow');
+  if (filterEl) filterEl.addEventListener('change', e => { logView.filter = e.target.value; renderLog(); });
+  if (showEl) showEl.addEventListener('change', e => { logView.showAll = (e.target.value === 'all'); renderLog(); });
+
+  document.querySelectorAll('.row-chk').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const id = cb.dataset.id;
+      if (cb.checked) logView.selected.add(id); else logView.selected.delete(id);
+      cb.closest('tr').classList.toggle('row-selected', cb.checked);
+      syncChkAll(); updateSelInfo();
+    });
+  });
+
+  const chkAll = $('chkAll');
+  if (chkAll) chkAll.addEventListener('change', () => {
+    getVisibleSamples().forEach(s => {
+      if (chkAll.checked) logView.selected.add(s.sample_id); else logView.selected.delete(s.sample_id);
+    });
+    renderLog();
+  });
+
+  const selVis = $('selectVisible');
+  if (selVis) selVis.addEventListener('click', () => {
+    getVisibleSamples().forEach(s => logView.selected.add(s.sample_id));
+    renderLog();
+  });
+  const clrSel = $('clearSelection');
+  if (clrSel) clrSel.addEventListener('click', () => { logView.selected.clear(); renderLog(); });
+}
+
+// "select all" reflects whether every visible row is selected
+function syncChkAll() {
+  const chkAll = $('chkAll');
+  if (!chkAll) return;
+  const visible = getVisibleSamples();
+  const allSel = visible.length > 0 && visible.every(s => logView.selected.has(s.sample_id));
+  chkAll.checked = allSel;
+  chkAll.indeterminate = !allSel && visible.some(s => logView.selected.has(s.sample_id));
+}
+
+function updateSelInfo() {
+  const n = logView.selected.size;
+  const selCountEl = $('selCount');
+  if (selCountEl) selCountEl.textContent = n;
+  const btn = $('deleteSelected');
+  if (btn) { btn.textContent = `✕ 刪除選取 (${n})`; btn.disabled = n === 0; }
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+// ---------- Undo / Delete-selected / Clear ----------
+$('undoLast').addEventListener('click', () => {
+  if (state.samples.length === 0) { showToast("沒有可刪除的資料", true); return; }
+  const removed = state.samples.pop();
+  logView.selected.delete(removed.sample_id);
+  renderLog(); updateStats(); updateProgress();
+  showToast(`已刪除上一筆 (${removed.label})`);
+});
+
+$('deleteSelected').addEventListener('click', () => {
+  const n = logView.selected.size;
+  if (n === 0) { showToast("尚未勾選任何資料", true); return; }
+  if (!confirm(`確定要刪除勾選的 ${n} 筆資料嗎？此動作無法復原。`)) return;
+  state.samples = state.samples.filter(s => !logView.selected.has(s.sample_id));
+  logView.selected.clear();
+  renderLog(); updateStats(); updateProgress();
+  showToast(`已刪除 ${n} 筆資料`);
+});
+
+$('clearAll').addEventListener('click', () => {
+  if (state.samples.length === 0) { showToast("資料已是空的", true); return; }
+  if (!confirm(`確定要清空全部 ${state.samples.length} 筆資料嗎？此動作無法復原。`)) return;
+  state.samples = [];
+  logView.selected.clear();
+  renderLog(); updateStats(); updateProgress();
+  showToast("已清空全部資料");
+});
+
+// ---------- Export: WIDE CSV (one row per sample, with features) ----------
+$('exportWide').addEventListener('click', () => {
+  if (!checkHasData()) return;
+  const header = [
+    'sample_id','subject_id','label','attempt_no','password','timestamp_iso',
+    'platform','n_keys','total_time_ms','had_correction',
+    'hold_mean','hold_std','flight_ud_mean','flight_ud_std','flight_dd_mean','flight_dd_std',
+    'holds','flight_ud','flight_dd','user_agent'
+  ];
+  const rows = state.samples.map(s => [
+    s.sample_id, s.subject_id, s.label, s.attempt_no, s.password, s.timestamp_iso,
+    s.platform, s.features.n_keys, s.total_time_ms, s.had_correction,
+    s.features.hold_mean, s.features.hold_std,
+    s.features.flight_ud_mean, s.features.flight_ud_std,
+    s.features.flight_dd_mean, s.features.flight_dd_std,
+    '"'+s.features.holds.join('|')+'"',
+    '"'+s.features.flight_ud.join('|')+'"',
+    '"'+s.features.flight_dd.join('|')+'"',
+    '"'+s.user_agent.replace(/"/g,"'")+'"'
+  ]);
+  downloadCSV(header, rows, 'keystroke_wide');
+});
+
+// ---------- Export: LONG CSV (one row per key event) ----------
+$('exportLong').addEventListener('click', () => {
+  if (!checkHasData()) return;
+  const header = ['sample_id','subject_id','label','attempt_no','event_type','key','code','time_ms'];
+  const rows = [];
+  state.samples.forEach(s => {
+    s.events.forEach(ev => {
+      rows.push([s.sample_id, s.subject_id, s.label, s.attempt_no,
+                 ev.type, jsonKey(ev.key), ev.code, ev.t]);
+    });
+  });
+  downloadCSV(header, rows, 'keystroke_long');
+});
+
+// ---------- Export: JSON (full backup) ----------
+$('exportJson').addEventListener('click', () => {
+  if (!checkHasData()) return;
+  const blob = new Blob([JSON.stringify({
+    exported_at: new Date().toISOString(),
+    target_password: state.targetPassword,
+    n_samples: state.samples.length,
+    samples: state.samples
+  }, null, 2)], { type: 'application/json' });
+  triggerDownload(blob, `keystroke_full_${stamp()}.json`);
+  showToast(`已導出 ${state.samples.length} 筆 JSON`);
+});
+
+// ---------- Import JSON (merge into current dataset) ----------
+$('importBtn').addEventListener('click', () => $('importFile').click());
+
+$('importFile').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      importSamples(data, file.name);
+    } catch (err) {
+      showToast("✗ 無法解析 JSON：檔案格式錯誤", true);
+    }
+    e.target.value = ''; // allow re-importing the same file
+  };
+  reader.onerror = () => { showToast("✗ 讀取檔案失敗", true); e.target.value=''; };
+  reader.readAsText(file);
+});
+
+function importSamples(data, filename) {
+  // Accept either {samples:[...]} (our export) or a bare array of samples.
+  let incoming = Array.isArray(data) ? data : data.samples;
+  if (!Array.isArray(incoming)) {
+    showToast("✗ 找不到 samples 陣列，這不是本工具導出的 JSON", true);
+    return;
+  }
+
+  // Validate each sample has the minimum required shape.
+  const valid = incoming.filter(s =>
+    s && typeof s === 'object' &&
+    typeof s.sample_id === 'string' &&
+    ['owner','imposter','bot'].includes(s.label) &&
+    s.features && Array.isArray(s.events)
+  );
+  if (valid.length === 0) {
+    showToast("✗ 沒有任何有效資料可導入", true);
+    return;
+  }
+
+  // Dedup by sample_id against what we already have.
+  const existingIds = new Set(state.samples.map(s => s.sample_id));
+  const fresh = valid.filter(s => !existingIds.has(s.sample_id));
+  const skipped = valid.length - fresh.length;
+  const malformed = incoming.length - valid.length;
+
+  if (fresh.length === 0) {
+    showToast(`未導入：${valid.length} 筆全部已存在（依 sample_id 判定）`, true);
+    return;
+  }
+
+  // Warn if the imported target password differs from current (data hygiene).
+  const importedPw = data.target_password;
+  let pwNote = '';
+  if (importedPw && importedPw !== state.targetPassword) {
+    pwNote = `\n\n⚠ 注意：導入檔的目標密碼是「${importedPw}」，與目前的「${state.targetPassword}」不同。請確認這是預期的，否則 timing 不可直接混用。`;
+  }
+
+  const msg = `準備導入 ${fresh.length} 筆新資料` +
+    (skipped ? `（略過 ${skipped} 筆重複）` : '') +
+    (malformed ? `（略過 ${malformed} 筆格式不符）` : '') +
+    `。\n\n將合併進目前的 ${state.samples.length} 筆，合併後共 ${state.samples.length + fresh.length} 筆。` +
+    pwNote +
+    `\n\n確定導入嗎？`;
+  if (!confirm(msg)) { showToast("已取消導入"); return; }
+
+  state.samples = state.samples.concat(fresh);
+  renumberAttempts();
+  renderLog(); updateStats(); updateProgress();
+  showToast(`✓ 已導入 ${fresh.length} 筆，目前共 ${state.samples.length} 筆`);
+}
+
+// After a merge, attempt_no per label can collide/gap. Renumber by timestamp
+// so each label's attempts run 1..N in chronological order.
+function renumberAttempts() {
+  const byLabel = { owner: [], imposter: [], bot: [] };
+  state.samples.forEach(s => { if (byLabel[s.label]) byLabel[s.label].push(s); });
+  Object.values(byLabel).forEach(arr => {
+    arr.sort((a,b) => new Date(a.timestamp_iso) - new Date(b.timestamp_iso));
+    arr.forEach((s, i) => s.attempt_no = i + 1);
+  });
+  // keep state.samples in chronological order overall too (nice for export)
+  state.samples.sort((a,b) => new Date(a.timestamp_iso) - new Date(b.timestamp_iso));
+}
+
+function jsonKey(k){ // wrap keys that could break CSV (comma, quote)
+  if (k === ',' || k === '"' || k === ' ') return '"'+k.replace(/"/g,'""')+'"';
+  return k;
+}
+
+function checkHasData() {
+  if (state.samples.length === 0) { showToast("沒有資料可導出", true); return false; }
+  return true;
+}
+
+function downloadCSV(header, rows, prefix) {
+  const csv = [header.join(',')].concat(rows.map(r => r.join(','))).join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }); // BOM for Excel
+  triggerDownload(blob, `${prefix}_${stamp()}.csv`);
+  showToast(`已導出 ${rows.length} 列 → ${prefix}.csv`);
+}
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function stamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2,'0');
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+// ---------- Toast ----------
+let toastTimer;
+function showToast(msg, isError=false) {
+  toast.textContent = msg;
+  toast.className = 'toast show' + (isError ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.className = 'toast' + (isError ? ' err' : ''), 2600);
+}
+
+// ---------- Init ----------
+pwInput.focus();
+updateStats();
+updateProgress();
+</script>
+</body>
+</html>
