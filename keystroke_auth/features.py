@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from statistics import multimode
 from typing import Sequence
 
 import numpy as np
@@ -19,8 +18,8 @@ def _safe_mode(values: Sequence[float] | np.ndarray) -> float:
         return 0.0
     if array.size < 3:
         return float(array[0])
-        
-    counts, edges = np.histogram(array, bins='auto')
+
+    counts, edges = np.histogram(array, bins="auto")
     max_bin_index = np.argmax(counts)
     return float((edges[max_bin_index] + edges[max_bin_index + 1]) / 2.0)
 
@@ -110,6 +109,38 @@ def compute_mfcc(
     return coeffs.astype(np.float64)
 
 
+def align_to_peak(
+    audio: Sequence[float] | np.ndarray,
+    timestamp: float,
+    window_size: float,
+    sample_rate: int = 44100,
+    key_length: int = 4500,
+) -> np.ndarray:
+    signal = _to_float_array(audio)
+    if signal.size == 0:
+        return np.zeros(0, dtype=np.float64)
+
+    center_index = int(round(float(timestamp) * sample_rate))
+    search_radius = max(int(round(float(window_size) * sample_rate)), 0)
+    search_start = max(center_index - search_radius, 0)
+    search_stop = min(center_index + search_radius + 1, signal.size)
+
+    if search_start >= search_stop:
+        peak_index = min(max(center_index, 0), signal.size - 1)
+    else:
+        search_window = signal[search_start:search_stop]
+        peak_index = search_start + int(np.argmax(np.abs(search_window)))
+
+    pre_peak_length = int(key_length * 0.05)
+    actual_start = max(0, peak_index - pre_peak_length)
+    stop_index = min(actual_start + max(int(key_length), 1), signal.size)
+
+    segment = signal[actual_start:stop_index]
+    if segment.size < key_length:
+        segment = np.pad(segment, (0, key_length - segment.size), "constant")
+    return segment
+
+
 def _window_energy(audio: np.ndarray, center_index: int, window_length: int) -> float:
     half = window_length // 2
     start = max(center_index - half, 0)
@@ -157,7 +188,7 @@ def extract_46_features(
 ) -> np.ndarray:
     signal = _to_float_array(audio)
     timestamps = _to_float_array(timestamps_sec)
-    
+
     # Trim the ambient noise/silence before the first keystroke
     if timestamps.size > 0:
         trim_sec = max(float(timestamps[0]) - 0.5, 0.0)
@@ -169,15 +200,32 @@ def extract_46_features(
     if timestamps.size == 0:
         timestamps = np.zeros(0, dtype=np.float64)
 
-    mfcc = compute_mfcc(signal, sample_rate, num_coeffs=32, num_filters=32)
+    alignment_window_sec = 0.05
+    aligned_segments = [
+        align_to_peak(
+            signal,
+            timestamp,
+            alignment_window_sec,
+            sample_rate=sample_rate,
+            key_length=key_length,
+        )
+        for timestamp in timestamps
+    ]
 
-    energies = np.array(
-        [
-            _window_energy(signal, int(round(timestamp * sample_rate)), key_length)
-            for timestamp in timestamps
-        ],
-        dtype=np.float64,
-    )
+    if aligned_segments:
+        mfcc_matrix = np.vstack(
+            [
+                compute_mfcc(segment, sample_rate, num_coeffs=32, num_filters=32)
+                for segment in aligned_segments
+            ]
+        )
+        mfcc = np.mean(mfcc_matrix, axis=0)
+        energies = np.array(
+            [float(np.sum(np.abs(segment))) for segment in aligned_segments], dtype=np.float64
+        )
+    else:
+        mfcc = np.zeros(32, dtype=np.float64)
+        energies = np.zeros(0, dtype=np.float64)
 
     strength_mean, strength_std, strength_max, strength_min, strength_mode, strength_median = (
         _safe_stats(energies)
@@ -201,9 +249,14 @@ def extract_46_features(
     else:
         diffs_for_stats = np.zeros(0, dtype=np.float64)
 
-    timing_mean, timing_std, timing_max, timing_min, timing_mode, timing_median = _safe_stats(diffs_for_stats)
-    key_count = float(timestamps.size)
     total_time = float(timestamps[-1] - timestamps[0]) if timestamps.size >= 2 else 0.0
+    if total_time > 0.0:
+        diffs_for_stats = diffs_for_stats / total_time
+
+    timing_mean, timing_std, timing_max, timing_min, timing_mode, timing_median = _safe_stats(
+        diffs_for_stats
+    )
+    key_count = float(timestamps.size)
 
     features = np.concatenate(
         [

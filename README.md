@@ -65,13 +65,17 @@ To enable the One-Time Password (OTP) fallback when the AI model rejects a valid
     *   Click **Save Passphrase to config.json**. The GUI will automatically switch to **Stage 3**.
 3.  **Stage 3: Data Collection**
     *   Enter the desired sample size (we recommend **10–15 samples** for robust SVM boundary training).
+    *   Enter the **Number of sessions** to divide the data collection into (this introduces periodic pauses, which encourages natural variations in typing rhythm and environmental noise).
     *   Click **Start Data Collection** to trigger the floating enrollment window.
     *   Type the passphrase exactly as prompted, pressing `Enter` to submit. Repeat until complete. The results are saved into `dataset.csv`.
 4.  **Stage 4: Modeling**
     *   Verify the path to your `dataset.csv`.
+    *   Select the **Algorithm** (`lof`, `iforest`, `pca_svm`, or `oc_svm`).
     *   Tune the hyperparameters:
-        *   `nu` ($\nu$): Controls the training error upper bound (defines how strict the boundary is).
-        *   `gamma` ($\gamma$): Controls the RBF kernel influence scale.
+        *   **Contamination / `nu`** ($\nu$): Controls the training error upper bound or the proportion of outliers in the training set (defines how strict the boundary is).
+        *   **Gamma** ($\gamma$): Controls the RBF kernel influence scale (used by SVM-based algorithms).
+        *   **N Estimators**: Number of trees in the forest (used by `iforest`).
+        *   **N Components**: Number of principal components to retain (used by `pca_svm`).
     *   Click **Train Model From CSV**. The trained weights are exported as `model.pkl` and `scaler.pkl`.
 
 ---
@@ -98,8 +102,9 @@ Due to the nature of high-dimensional feature spaces (46-D) and typical small sa
 2.  Ensure that **Model Path** and **Scaler Path** point to your exported `.pkl` files.
 3.  In **Recipient Gmail**, enter the receiver's address where the OTP code should be delivered.
 4.  *(Optional)* Toggle **Test Mode** if you want to test the entire validation pipeline (including OTP entry) without sending real emails (this prevents being throttled or banned by Gmail SMTP limits during rapid testing).
-5.  Click **Authenticate**. A specialized, secure login window will pop up.
-6.  Begin typing your passphrase. The system dynamically records your acoustic waveforms and keystroke dynamics in real-time. Press `Enter` to log in.
+5.  *(Optional)* Adjust the **Auth Threshold**. A higher threshold makes the system stricter, increasing security but potentially raising the False Rejection Rate (FRR).
+6.  Click **Authenticate**. A specialized, secure login window will pop up.
+7.  Begin typing your passphrase. The system dynamically records your acoustic waveforms and keystroke dynamics in real-time. Press `Enter` to log in.
 7.  **Outcomes**:
     *   **Success**: If both typing speed/sounds and the characters match, a large, prominent green **Login Success** window pops up.
     *   **Incorrect Passphrase**: If you mistype, the passphrase window displays a red error warning inline and resets the text box, letting you retry instantly.

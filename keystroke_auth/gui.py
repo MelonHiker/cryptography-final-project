@@ -12,9 +12,8 @@ from .config import load_config, save_config
 from .features import extract_46_features
 from .modeling import (
     append_feature_row,
-    load_artifacts,
+    calibrate_auth_threshold,
     load_feature_matrix,
-    predict_with_artifacts,
     save_artifacts,
     train_one_class_model,
 )
@@ -58,6 +57,13 @@ class KeystrokeAuthApp:
         self.collection_capture_previous_length = 0
         self.collection_expected_text = ""
         self.collection_key_bind_id = None
+        self.collection_session_plan: list[int] = []
+        self.collection_session_index = 0
+        self.collection_session_sample_count = 0
+        self.collection_session_count = 4
+        self.collection_session_paused = False
+        self.collection_continue_button = None
+        self.collection_noise_std = 0.0015
         self.model_dataset_path_var = None
         self.model_nu_var = None
         self.model_gamma_var = None
@@ -96,10 +102,10 @@ class KeystrokeAuthApp:
 
     def _run_background(self, callback, on_success=None, on_error=None) -> None:
         import queue
+
         q = queue.Queue()
 
         def worker() -> None:
-            import traceback
             try:
                 result = callback()
                 q.put(("success", result))
@@ -194,12 +200,16 @@ class KeystrokeAuthApp:
             "Stage 1 Calibration",
             "Press the space bar 3 times with a normal force. The app will estimate the fixed key-sound length L and persist it in config.json.",
         )
-        
+
         self.calibration_sample_rate_var = ctk.StringVar(value=str(self.config.sample_rate))
         param_frame = ctk.CTkFrame(card, fg_color="transparent")
         param_frame.pack(fill="x", padx=16, pady=(0, 12))
-        ctk.CTkLabel(param_frame, text="Sample Rate (Hz):", anchor="w").pack(side="left", padx=(0, 8))
-        ctk.CTkEntry(param_frame, textvariable=self.calibration_sample_rate_var, width=100).pack(side="left")
+        ctk.CTkLabel(param_frame, text="Sample Rate (Hz):", anchor="w").pack(
+            side="left", padx=(0, 8)
+        )
+        ctk.CTkEntry(param_frame, textvariable=self.calibration_sample_rate_var, width=100).pack(
+            side="left"
+        )
 
         ctk.CTkButton(card, text="Run Calibration", command=self.run_calibration).pack(
             anchor="w", padx=16, pady=(0, 16)
@@ -241,12 +251,28 @@ class KeystrokeAuthApp:
         ctk.CTkEntry(card, textvariable=self.collection_target_var, width=140).pack(
             anchor="w", padx=16, pady=(0, 12)
         )
+        
+        ctk.CTkLabel(card, text="Number of sessions:", anchor="w", justify="left").pack(
+            anchor="w", padx=16, pady=(0, 4)
+        )
+        self.collection_session_var = ctk.StringVar(value=str(getattr(self.config, "collection_session_count", 4)))
+        ctk.CTkEntry(card, textvariable=self.collection_session_var, width=140).pack(
+            anchor="w", padx=16, pady=(0, 12)
+        )
+
         ctk.CTkButton(
-            card, text="Start Data Collection", command=lambda: self.start_bulk_collection(
+            card,
+            text="Start Data Collection",
+            command=lambda: self.start_bulk_collection(
                 self.config.dataset_path,
-                int(self.collection_target_var.get().strip()) if self.collection_target_var and self.collection_target_var.get().strip().isdigit() else 100,
-                "Stage 3 Data Collection"
-            )
+                int(self.collection_target_var.get().strip())
+                if self.collection_target_var and self.collection_target_var.get().strip().isdigit()
+                else 100,
+                "Stage 3 Data Collection",
+                int(self.collection_session_var.get().strip())
+                if hasattr(self, "collection_session_var") and self.collection_session_var.get().strip().isdigit()
+                else 4,
+            ),
         ).pack(anchor="w", padx=16, pady=(0, 16))
         ctk.CTkLabel(
             card,
@@ -257,8 +283,19 @@ class KeystrokeAuthApp:
 
     def _is_valid_biometric_key(self, event) -> bool:
         invalid_keys = {
-            "Return", "KP_Enter", "Shift_L", "Shift_R", "Control_L", "Control_R", 
-            "Alt_L", "Alt_R", "Super_L", "Super_R", "Caps_Lock", "Tab", "Escape"
+            "Return",
+            "KP_Enter",
+            "Shift_L",
+            "Shift_R",
+            "Control_L",
+            "Control_R",
+            "Alt_L",
+            "Alt_R",
+            "Super_L",
+            "Super_R",
+            "Caps_Lock",
+            "Tab",
+            "Escape",
         }
         return event.keysym not in invalid_keys
 
@@ -283,24 +320,36 @@ class KeystrokeAuthApp:
         ctk.CTkEntry(card, textvariable=self.model_dataset_path_var, width=520).pack(
             anchor="w", padx=16, pady=(0, 12)
         )
-        
+
         ctk.CTkLabel(card, text="Algorithm:", anchor="w", justify="left").pack(
             anchor="w", padx=16, pady=(0, 4)
         )
         ctk.CTkOptionMenu(
-            card, variable=self.model_algorithm_var, values=["lof", "iforest", "svm", "pca_svm"],
-            command=self._on_algorithm_change
+            card,
+            variable=self.model_algorithm_var,
+            values=["lof", "iforest", "svm", "pca_svm"],
+            command=self._on_algorithm_change,
         ).pack(anchor="w", padx=16, pady=(0, 12))
-        
+
         self.model_param_grid = ctk.CTkFrame(card, fg_color="transparent")
         self.model_param_grid.pack(fill="x", padx=16, pady=(0, 12))
-        
-        self.model_nu_frame = self._add_labeled_entry(ctk, self.model_param_grid, "nu", self.model_nu_var)
-        self.model_gamma_frame = self._add_labeled_entry(ctk, self.model_param_grid, "gamma", self.model_gamma_var)
-        self.model_contamination_frame = self._add_labeled_entry(ctk, self.model_param_grid, "contamination (0.001 - 0.5)", self.model_contamination_var)
-        self.model_n_components_frame = self._add_labeled_entry(ctk, self.model_param_grid, "n_components", self.model_n_components_var)
-        self.model_n_estimators_frame = self._add_labeled_entry(ctk, self.model_param_grid, "n_estimators", self.model_n_estimators_var)
-        
+
+        self.model_nu_frame = self._add_labeled_entry(
+            ctk, self.model_param_grid, "nu", self.model_nu_var
+        )
+        self.model_gamma_frame = self._add_labeled_entry(
+            ctk, self.model_param_grid, "gamma", self.model_gamma_var
+        )
+        self.model_contamination_frame = self._add_labeled_entry(
+            ctk, self.model_param_grid, "contamination (0.001 - 0.5)", self.model_contamination_var
+        )
+        self.model_n_components_frame = self._add_labeled_entry(
+            ctk, self.model_param_grid, "n_components", self.model_n_components_var
+        )
+        self.model_n_estimators_frame = self._add_labeled_entry(
+            ctk, self.model_param_grid, "n_estimators", self.model_n_estimators_var
+        )
+
         self._on_algorithm_change(self.model_algorithm_var.get())
 
         ctk.CTkButton(card, text="Train Model From CSV", command=self.train_model).pack(
@@ -308,9 +357,9 @@ class KeystrokeAuthApp:
         )
 
     def _on_algorithm_change(self, choice: str) -> None:
-        if not hasattr(self, 'model_nu_frame'):
+        if not hasattr(self, "model_nu_frame"):
             return
-            
+
         self.model_nu_frame.grid_remove()
         self.model_gamma_frame.grid_remove()
         self.model_contamination_frame.grid_remove()
@@ -321,11 +370,17 @@ class KeystrokeAuthApp:
             self.model_nu_frame.grid(row=0, column=0, padx=(0, 16), pady=(0, 12), sticky="w")
             self.model_gamma_frame.grid(row=0, column=1, padx=(0, 16), pady=(0, 12), sticky="w")
             if choice == "pca_svm":
-                self.model_n_components_frame.grid(row=0, column=2, padx=(0, 16), pady=(0, 12), sticky="w")
+                self.model_n_components_frame.grid(
+                    row=0, column=2, padx=(0, 16), pady=(0, 12), sticky="w"
+                )
         else:
-            self.model_contamination_frame.grid(row=0, column=0, padx=(0, 16), pady=(0, 12), sticky="w")
+            self.model_contamination_frame.grid(
+                row=0, column=0, padx=(0, 16), pady=(0, 12), sticky="w"
+            )
             if choice == "iforest":
-                self.model_n_estimators_frame.grid(row=0, column=1, padx=(0, 16), pady=(0, 12), sticky="w")
+                self.model_n_estimators_frame.grid(
+                    row=0, column=1, padx=(0, 16), pady=(0, 12), sticky="w"
+                )
 
     def _build_auth_tab(self, ctk, parent) -> None:
         card = self._build_section_card(
@@ -340,6 +395,7 @@ class KeystrokeAuthApp:
         self.test_mode_var = ctk.BooleanVar(value=False)
         self.auth_otp_dialog = None
         self.login_success_var = ctk.StringVar(value="")
+        self.auth_threshold_var = ctk.StringVar(value=str(self.config.auth_threshold))
 
         ctk.CTkLabel(card, text="Model path:", anchor="w", justify="left").pack(
             anchor="w", padx=16, pady=(0, 4)
@@ -354,15 +410,22 @@ class KeystrokeAuthApp:
         ctk.CTkEntry(card, textvariable=self.auth_scaler_path_var, width=520).pack(
             anchor="w", padx=16, pady=(0, 12)
         )
-        
+
         ctk.CTkLabel(card, text="Recipient Gmail (for 2FA):", anchor="w", justify="left").pack(
             anchor="w", padx=16, pady=(0, 4)
         )
         ctk.CTkEntry(card, textvariable=self.auth_gmail_var, width=520).pack(
             anchor="w", padx=16, pady=(0, 12)
         )
-        
-        ctk.CTkCheckBox(card, text="Test Mode (Disable actual SMTP email sending)", variable=self.test_mode_var).pack(
+
+        ctk.CTkCheckBox(
+            card, text="Test Mode (Disable actual SMTP email sending)", variable=self.test_mode_var
+        ).pack(anchor="w", padx=16, pady=(0, 12))
+
+        ctk.CTkLabel(card, text="AUTH_THRESHOLD:", anchor="w", justify="left").pack(
+            anchor="w", padx=16, pady=(0, 4)
+        )
+        ctk.CTkEntry(card, textvariable=self.auth_threshold_var, width=180).pack(
             anchor="w", padx=16, pady=(0, 12)
         )
 
@@ -375,7 +438,6 @@ class KeystrokeAuthApp:
         button_row = ctk.CTkFrame(card, fg_color="transparent")
         button_row.pack(anchor="w", padx=16, pady=(0, 16), fill="x")
         ctk.CTkButton(button_row, text="Authenticate", command=self.authenticate).pack(side="left")
-
 
         self.success_frame = ctk.CTkFrame(card, corner_radius=16)
         self.success_frame.pack(fill="x", padx=16, pady=(0, 16))
@@ -396,85 +458,146 @@ class KeystrokeAuthApp:
         card = self._build_section_card(
             ctk, parent, "Stage 6 Evaluation", "Record test sets and evaluate model FAR/FRR."
         )
-        self.eval_owner_path_var = ctk.StringVar(value=str(self.config_path.parent / "test_owner.csv"))
-        self.eval_imposter_path_var = ctk.StringVar(value=str(self.config_path.parent / "test_imposter.csv"))
+        self.eval_owner_path_var = ctk.StringVar(
+            value=str(self.config_path.parent / "test_owner.csv")
+        )
+        self.eval_imposter_path_var = ctk.StringVar(
+            value=str(self.config_path.parent / "test_imposter.csv")
+        )
         self.eval_model_path_var = ctk.StringVar(value=self.config.model_path)
         self.eval_scaler_path_var = ctk.StringVar(value=self.config.scaler_path)
+        self.eval_threshold_var = ctk.StringVar(value=str(self.config.auth_threshold))
 
         grid = ctk.CTkFrame(card, fg_color="transparent")
         grid.pack(fill="x", padx=16, pady=4)
-        
+
         self.eval_owner_target_var = ctk.StringVar(value="5")
         self.eval_imposter_target_var = ctk.StringVar(value="5")
-        
-        self._add_labeled_entry(ctk, grid, "Owner Test CSV:", self.eval_owner_path_var).grid(row=0, column=0, padx=(0, 16), pady=4, sticky="w")
-        self._add_labeled_entry(ctk, grid, "Owner Target Samples:", self.eval_owner_target_var).grid(row=1, column=0, padx=(0, 16), pady=4, sticky="w")
-        
-        self._add_labeled_entry(ctk, grid, "Imposter Test CSV:", self.eval_imposter_path_var).grid(row=0, column=1, padx=(0, 16), pady=4, sticky="w")
-        self._add_labeled_entry(ctk, grid, "Imposter Target Samples:", self.eval_imposter_target_var).grid(row=1, column=1, padx=(0, 16), pady=4, sticky="w")
-        
+
+        self._add_labeled_entry(ctk, grid, "Owner Test CSV:", self.eval_owner_path_var).grid(
+            row=0, column=0, padx=(0, 16), pady=4, sticky="w"
+        )
+        self._add_labeled_entry(
+            ctk, grid, "Owner Target Samples:", self.eval_owner_target_var
+        ).grid(row=1, column=0, padx=(0, 16), pady=4, sticky="w")
+
+        self._add_labeled_entry(ctk, grid, "Imposter Test CSV:", self.eval_imposter_path_var).grid(
+            row=0, column=1, padx=(0, 16), pady=4, sticky="w"
+        )
+        self._add_labeled_entry(
+            ctk, grid, "Imposter Target Samples:", self.eval_imposter_target_var
+        ).grid(row=1, column=1, padx=(0, 16), pady=4, sticky="w")
+
         btn_grid = ctk.CTkFrame(card, fg_color="transparent")
         btn_grid.pack(fill="x", padx=16, pady=12)
-        
-        ctk.CTkButton(btn_grid, text="Record Owner Sample", command=lambda: self.start_bulk_collection(
-            self.eval_owner_path_var.get().strip(),
-            int(self.eval_owner_target_var.get().strip()) if self.eval_owner_target_var.get().strip().isdigit() else 5,
-            "Record Owner Test Samples"
-        )).pack(side="left", padx=(0, 16))
-        
-        ctk.CTkButton(btn_grid, text="Record Imposter Sample", command=lambda: self.start_bulk_collection(
-            self.eval_imposter_path_var.get().strip(),
-            int(self.eval_imposter_target_var.get().strip()) if self.eval_imposter_target_var.get().strip().isdigit() else 5,
-            "Record Imposter Test Samples"
-        )).pack(side="left")
-        
+
+        ctk.CTkButton(
+            btn_grid,
+            text="Record Owner Sample",
+            command=lambda: self.start_bulk_collection(
+                self.eval_owner_path_var.get().strip(),
+                int(self.eval_owner_target_var.get().strip())
+                if self.eval_owner_target_var.get().strip().isdigit()
+                else 5,
+                "Record Owner Test Samples",
+            ),
+        ).pack(side="left", padx=(0, 16))
+
+        ctk.CTkButton(
+            btn_grid,
+            text="Record Imposter Sample",
+            command=lambda: self.start_bulk_collection(
+                self.eval_imposter_path_var.get().strip(),
+                int(self.eval_imposter_target_var.get().strip())
+                if self.eval_imposter_target_var.get().strip().isdigit()
+                else 5,
+                "Record Imposter Test Samples",
+            ),
+        ).pack(side="left")
+
         ctk.CTkFrame(card, height=2, fg_color="gray").pack(fill="x", padx=16, pady=12)
-        
+
         model_grid = ctk.CTkFrame(card, fg_color="transparent")
         model_grid.pack(fill="x", padx=16, pady=4)
-        self._add_labeled_entry(ctk, model_grid, "Model Path:", self.eval_model_path_var).grid(row=0, column=0, padx=(0, 16), pady=4, sticky="w")
-        self._add_labeled_entry(ctk, model_grid, "Scaler Path:", self.eval_scaler_path_var).grid(row=0, column=1, padx=(0, 16), pady=4, sticky="w")
+        self._add_labeled_entry(ctk, model_grid, "Model Path:", self.eval_model_path_var).grid(
+            row=0, column=0, padx=(0, 16), pady=4, sticky="w"
+        )
+        self._add_labeled_entry(ctk, model_grid, "Scaler Path:", self.eval_scaler_path_var).grid(
+            row=0, column=1, padx=(0, 16), pady=4, sticky="w"
+        )
+        self._add_labeled_entry(ctk, model_grid, "AUTH_THRESHOLD:", self.eval_threshold_var).grid(
+            row=1, column=0, padx=(0, 16), pady=4, sticky="w"
+        )
 
-        ctk.CTkButton(card, text="Evaluate Model", command=self._evaluate_model).pack(anchor="w", padx=16, pady=12)
-        
+        ctk.CTkButton(card, text="Evaluate Model", command=self._evaluate_model).pack(
+            anchor="w", padx=16, pady=12
+        )
+
         self.eval_results_var = ctk.StringVar(value="Results will appear here.")
-        ctk.CTkLabel(card, textvariable=self.eval_results_var, justify="left", font=ctk.CTkFont(family="Courier", size=14)).pack(anchor="w", padx=16, pady=(0, 16))
+        ctk.CTkLabel(
+            card,
+            textvariable=self.eval_results_var,
+            justify="left",
+            font=ctk.CTkFont(family="Courier", size=14),
+        ).pack(anchor="w", padx=16, pady=(0, 16))
 
     def _evaluate_model(self) -> None:
-        from keystroke_auth.modeling import load_artifacts, load_feature_matrix, predict_with_artifacts
-        
+        from keystroke_auth.modeling import (
+            load_artifacts,
+            load_feature_matrix,
+            score_with_artifacts,
+        )
+
         owner_path = self.eval_owner_path_var.get().strip()
         imposter_path = self.eval_imposter_path_var.get().strip()
         model_path = self.eval_model_path_var.get().strip()
         scaler_path = self.eval_scaler_path_var.get().strip()
-        
+
         try:
             artifacts = load_artifacts(model_path, scaler_path)
-            
-            owner_matrix = load_feature_matrix(owner_path) if Path(owner_path).exists() else np.zeros((0, 46))
-            imposter_matrix = load_feature_matrix(imposter_path) if Path(imposter_path).exists() else np.zeros((0, 46))
-            
-            if owner_matrix.shape[0] == 0 and imposter_matrix.shape[0] == 0:
-                self.eval_results_var.set("Error: Both test datasets are empty or missing.")
+
+            owner_matrix = (
+                load_feature_matrix(owner_path) if Path(owner_path).exists() else np.zeros((0, 46))
+            )
+            imposter_matrix = (
+                load_feature_matrix(imposter_path)
+                if Path(imposter_path).exists()
+                else np.zeros((0, 46))
+            )
+
+            if owner_matrix.shape[0] == 0 or imposter_matrix.shape[0] == 0:
+                self.eval_results_var.set(
+                    "Error: Both owner and imposter test datasets are required for threshold calibration."
+                )
                 self._set_status("Evaluation failed.")
                 return
-                
-            owner_preds = [predict_with_artifacts(artifacts, row) for row in owner_matrix]
-            imposter_preds = [predict_with_artifacts(artifacts, row) for row in imposter_matrix]
-            
-            # Owner should be 1, Imposter should be -1
-            frr = sum(1 for p in owner_preds if p == -1) / len(owner_preds) if owner_preds else 0.0
-            far = sum(1 for p in imposter_preds if p == 1) / len(imposter_preds) if imposter_preds else 0.0
-            
+
+            owner_scores = [score_with_artifacts(artifacts, row) for row in owner_matrix]
+            imposter_scores = [score_with_artifacts(artifacts, row) for row in imposter_matrix]
+            threshold, far, frr = calibrate_auth_threshold(owner_scores, imposter_scores)
+
+            self.config.auth_threshold = threshold
+            if self.auth_threshold_var is not None:
+                self.auth_threshold_var.set(f"{threshold:.6f}")
+            if self.eval_threshold_var is not None:
+                self.eval_threshold_var.set(f"{threshold:.6f}")
+            save_config(self.config, self.config_path)
+
+            owner_preds = [1 if score > threshold else -1 for score in owner_scores]
+            imposter_preds = [1 if score > threshold else -1 for score in imposter_scores]
+
             total_samples = len(owner_preds) + len(imposter_preds)
-            correct = sum(1 for p in owner_preds if p == 1) + sum(1 for p in imposter_preds if p == -1)
+            correct = sum(1 for p in owner_preds if p == 1) + sum(
+                1 for p in imposter_preds if p == -1
+            )
             accuracy = correct / total_samples if total_samples > 0 else 0.0
-            
+
             results = (
                 f"--- Evaluation Results ---\n"
                 f"Model: {Path(model_path).name}\n"
                 f"Owner Samples (True Positives targeted): {len(owner_preds)}\n"
                 f"Imposter Samples (True Negatives targeted): {len(imposter_preds)}\n\n"
+                f"AUTH_THRESHOLD: {threshold:.6f}\n"
                 f"FAR (False Acceptance Rate): {far * 100:.2f}%\n"
                 f"FRR (False Rejection Rate): {frr * 100:.2f}%\n"
                 f"Overall Accuracy: {accuracy * 100:.2f}%\n"
@@ -494,6 +617,11 @@ class KeystrokeAuthApp:
         self.smtp_port_var = ctk.StringVar(value=str(self.config.smtp_port))
         self.smtp_username_var = ctk.StringVar(value=self.config.smtp_username)
         self.smtp_password_var = ctk.StringVar(value=self.config.smtp_password)
+        self.collection_session_count_var = ctk.StringVar(
+            value=str(self.config.collection_session_count)
+        )
+        self.white_noise_std_var = ctk.StringVar(value=str(self.config.white_noise_std))
+        self.settings_threshold_var = ctk.StringVar(value=str(self.config.auth_threshold))
 
         fields = [
             ("SMTP Host:", self.smtp_host_var, False),
@@ -511,6 +639,29 @@ class KeystrokeAuthApp:
                 entry.configure(show="*")
             entry.pack(anchor="w", padx=16, pady=(0, 8))
 
+        ctk.CTkFrame(card, height=2, fg_color="gray").pack(fill="x", padx=16, pady=(8, 12))
+
+        ctk.CTkLabel(card, text="Collection Session Count:", anchor="w", justify="left").pack(
+            anchor="w", padx=16, pady=(0, 4)
+        )
+        ctk.CTkEntry(card, textvariable=self.collection_session_count_var, width=180).pack(
+            anchor="w", padx=16, pady=(0, 8)
+        )
+
+        ctk.CTkLabel(card, text="White Noise Std:", anchor="w", justify="left").pack(
+            anchor="w", padx=16, pady=(0, 4)
+        )
+        ctk.CTkEntry(card, textvariable=self.white_noise_std_var, width=180).pack(
+            anchor="w", padx=16, pady=(0, 8)
+        )
+
+        ctk.CTkLabel(card, text="AUTH_THRESHOLD:", anchor="w", justify="left").pack(
+            anchor="w", padx=16, pady=(0, 4)
+        )
+        ctk.CTkEntry(card, textvariable=self.settings_threshold_var, width=180).pack(
+            anchor="w", padx=16, pady=(0, 12)
+        )
+
         def save_settings() -> None:
             self.config.smtp_host = self.smtp_host_var.get().strip()
             try:
@@ -520,10 +671,36 @@ class KeystrokeAuthApp:
                 return
             self.config.smtp_username = self.smtp_username_var.get().strip()
             self.config.smtp_password = self.smtp_password_var.get().strip()
-            
+
+            try:
+                self.config.collection_session_count = int(
+                    self.collection_session_count_var.get().strip()
+                )
+            except ValueError:
+                self._set_status("Collection session count must be a number.")
+                return
+
+            try:
+                self.config.white_noise_std = float(self.white_noise_std_var.get().strip())
+            except ValueError:
+                self._set_status("White noise std must be a number.")
+                return
+
+            try:
+                self.config.auth_threshold = float(self.settings_threshold_var.get().strip())
+            except ValueError:
+                self._set_status("AUTH_THRESHOLD must be a number.")
+                return
+
+            if self.auth_threshold_var is not None:
+                self.auth_threshold_var.set(f"{self.config.auth_threshold:.6f}")
+            if self.eval_threshold_var is not None:
+                self.eval_threshold_var.set(f"{self.config.auth_threshold:.6f}")
+
             from keystroke_auth.config import save_config
+
             save_config(self.config)
-            self._set_status("SMTP settings saved to config.json.")
+            self._set_status("Settings saved to config.json.")
 
         ctk.CTkButton(card, text="Save Settings", command=save_settings).pack(
             anchor="w", padx=16, pady=(8, 16)
@@ -565,10 +742,8 @@ class KeystrokeAuthApp:
             wraplength=340,
             justify="left",
         ).pack(anchor="w", padx=16, pady=(0, 8))
-        
-        self.auth_otp_entry = ctk.CTkEntry(
-            frame, placeholder_text="OTP code", width=340
-        )
+
+        self.auth_otp_entry = ctk.CTkEntry(frame, placeholder_text="OTP code", width=340)
         self.auth_otp_entry.pack(anchor="w", padx=16, pady=(0, 16))
         self.auth_otp_entry.bind("<Return>", lambda _event: self.verify_otp())
         self.auth_otp_dialog.after_idle(self.auth_otp_entry.focus_set)
@@ -597,16 +772,25 @@ class KeystrokeAuthApp:
 
         frame = ctk.CTkFrame(success_dialog, corner_radius=18, fg_color="#2ECC71")
         frame.pack(fill="both", expand=True, padx=16, pady=16)
-        
+
         ctk.CTkLabel(
             frame, text="SUCCESS", font=ctk.CTkFont(size=48, weight="bold"), text_color="white"
         ).pack(expand=True, pady=(20, 0))
         ctk.CTkLabel(
-            frame, text=message, font=ctk.CTkFont(size=18, weight="bold"), text_color="white", wraplength=400
+            frame,
+            text=message,
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="white",
+            wraplength=400,
         ).pack(pady=(10, 20))
-        
+
         ctk.CTkButton(
-            frame, text="OK", command=success_dialog.destroy, fg_color="white", text_color="#2ECC71", font=ctk.CTkFont(weight="bold")
+            frame,
+            text="OK",
+            command=success_dialog.destroy,
+            fg_color="white",
+            text_color="#2ECC71",
+            font=ctk.CTkFont(weight="bold"),
         ).pack(pady=(0, 20))
 
     def _refresh_login_success_visibility(self) -> None:
@@ -624,7 +808,9 @@ class KeystrokeAuthApp:
         self._switch_to_feature_tab()
         self._set_status("Passphrase saved to config.json. Please continue in Stage 3.")
 
-    def start_bulk_collection(self, target_filepath: str, target_count: int, title: str = "Data Collection") -> None:
+    def start_bulk_collection(
+        self, target_filepath: str, target_count: int, title: str = "Data Collection", session_count: int | None = None
+    ) -> None:
         if not self.config.passphrase:
             self._set_status("Please set a passphrase in Stage 2 first.")
             return
@@ -637,6 +823,21 @@ class KeystrokeAuthApp:
         self.collection_expected_count = target_count
         self.collection_current_index = 0
         self.collection_target_filepath = target_filepath
+        
+        if session_count is None:
+            session_count = max(
+                1, min(target_count, int(getattr(self.config, "collection_session_count", 4)))
+            )
+        else:
+            session_count = max(1, min(target_count, session_count))
+            
+        self.collection_session_count = session_count
+        self.collection_session_plan = self._build_collection_session_plan(
+            target_count, self.collection_session_count
+        )
+        self.collection_session_index = 0
+        self.collection_session_sample_count = 0
+        self.collection_session_paused = False
         self._open_bulk_dialog(title)
         self._begin_bulk_sample()
 
@@ -676,13 +877,27 @@ class KeystrokeAuthApp:
             container, textvariable=self.collection_input_var, width=420
         )
         self.collection_input_entry.pack(anchor="w", padx=16, pady=(0, 12))
+        self.collection_continue_button = ctk.CTkButton(
+            container, text="Continue Next Session", command=self._resume_bulk_session
+        )
         self.collection_dialog.after_idle(self.collection_input_entry.focus_set)
         ctk.CTkButton(container, text="Cancel", command=self._cancel_bulk_collection).pack(
             anchor="w", padx=16, pady=(0, 16)
         )
 
+    def _build_collection_session_plan(self, total_count: int, session_count: int) -> list[int]:
+        total_count = max(int(total_count), 0)
+        session_count = max(int(session_count), 1)
+        if total_count == 0:
+            return []
+        session_count = min(session_count, total_count)
+        base = total_count // session_count
+        remainder = total_count % session_count
+        return [base + (1 if index < remainder else 0) for index in range(session_count)]
+
     def _cancel_bulk_collection(self) -> None:
         self.collection_active = False
+        self.collection_session_paused = False
         if self.collection_capture_stop_event is not None:
             self.collection_capture_stop_event.set()
         if self.collection_capture_thread is not None:
@@ -698,6 +913,7 @@ class KeystrokeAuthApp:
         self.collection_capture_audio = None
         self.collection_input_entry = None
         self.collection_input_var = None
+        self.collection_continue_button = None
         self._set_status("Data collection canceled.")
 
     def _begin_bulk_sample(self) -> None:
@@ -720,13 +936,22 @@ class KeystrokeAuthApp:
                 f"{self.collection_current_index} / {self.collection_expected_count} collected"
             )
         if self.collection_prompt_var is not None:
+            session_total = (
+                self.collection_session_plan[self.collection_session_index]
+                if self.collection_session_plan
+                and self.collection_session_index < len(self.collection_session_plan)
+                else self.collection_expected_count
+            )
             self.collection_prompt_var.set(
-                f"Sample {self.collection_current_index + 1} of {self.collection_expected_count}: type the passphrase and press Enter to submit."
+                f"Session {self.collection_session_index + 1}/{len(self.collection_session_plan) or 1} | "
+                f"Sample {self.collection_session_sample_count + 1} of {session_total}: type the passphrase and press Enter to submit."
             )
         if self.collection_input_var is not None:
             self.collection_input_var.set("")
         if self.collection_input_entry is not None:
             self.collection_dialog.after_idle(self.collection_input_entry.focus_set)
+        if self.collection_continue_button is not None:
+            self.collection_continue_button.pack_forget()
 
         from threading import Event
 
@@ -736,6 +961,7 @@ class KeystrokeAuthApp:
             from .capture import AudioRecorder
 
             recorder = AudioRecorder(sample_rate=self.config.sample_rate)
+
             def set_start():
                 self.collection_capture_started_at = perf_counter()
 
@@ -750,19 +976,16 @@ class KeystrokeAuthApp:
         self.collection_capture_thread.start()
 
         if self.collection_dialog is not None:
-            self.collection_dialog.bind_all(
-                "<KeyPress>", self._on_bulk_collection_key_press, add="+"
-            )
-            self.collection_dialog.bind_all(
-                "<KeyRelease>", self._on_bulk_collection_key_release, add="+"
-            )
+            self.collection_dialog.unbind_all("<KeyPress>")
+            self.collection_dialog.unbind_all("<KeyRelease>")
+            self.collection_dialog.bind_all("<KeyPress>", self._on_bulk_collection_key_press)
+            self.collection_dialog.bind_all("<KeyRelease>", self._on_bulk_collection_key_release)
             self.collection_dialog.bind_all("<Return>", self._on_bulk_collection_submit, add="+")
-            self.collection_dialog.bind_all(
-                "<KP_Enter>", self._on_bulk_collection_submit, add="+"
-            )
+            self.collection_dialog.bind_all("<KP_Enter>", self._on_bulk_collection_submit, add="+")
 
     def _finish_bulk_collection(self) -> None:
         self.collection_active = False
+        self.collection_session_paused = False
         if self.collection_capture_stop_event is not None:
             self.collection_capture_stop_event.set()
         if self.collection_capture_thread is not None:
@@ -780,8 +1003,59 @@ class KeystrokeAuthApp:
         self.collection_capture_audio = None
         self.collection_input_entry = None
         self.collection_input_var = None
+        self.collection_continue_button = None
 
         self._set_status("Bulk collection complete. CSV has been written.")
+
+    def _pause_bulk_session(self) -> None:
+        self.collection_session_paused = True
+        if self.collection_capture_stop_event is not None:
+            self.collection_capture_stop_event.set()
+        if self.collection_capture_thread is not None:
+            self.collection_capture_thread.join()
+
+        if self.collection_dialog is not None:
+            self.collection_dialog.unbind_all("<KeyPress>")
+            self.collection_dialog.unbind_all("<KeyRelease>")
+            self.collection_dialog.unbind_all("<Return>")
+            self.collection_dialog.unbind_all("<KP_Enter>")
+
+        if self.collection_continue_button is not None:
+            self.collection_continue_button.pack(anchor="w", padx=16, pady=(0, 12))
+
+        if self.collection_prompt_var is not None:
+            self.collection_prompt_var.set(
+                "Session pause. Change the laptop angle or surrounding noise, then click Continue Next Session to resume."
+            )
+        if self.collection_input_entry is not None:
+            self.collection_input_entry.configure(state="disabled")
+
+    def _resume_bulk_session(self) -> None:
+        if not self.collection_session_paused:
+            return
+
+        self.collection_session_paused = False
+        if self.collection_input_entry is not None:
+            self.collection_input_entry.configure(state="normal")
+        if self.collection_continue_button is not None:
+            self.collection_continue_button.pack_forget()
+
+        self.collection_session_index += 1
+        self.collection_session_sample_count = 0
+        self._begin_bulk_sample()
+
+    def _augment_training_audio(self, audio: np.ndarray) -> np.ndarray:
+        noise_std = float(getattr(self.config, "white_noise_std", self.collection_noise_std))
+        if audio.size == 0 or noise_std <= 0.0:
+            return audio
+
+        rng = np.random.default_rng()
+        if rng.random() > 0.35:
+            return audio
+
+        scaled_std = noise_std * float(rng.uniform(0.25, 1.0))
+        noisy_audio = audio + rng.normal(0.0, scaled_std, size=audio.shape)
+        return np.clip(noisy_audio, -1.0, 1.0)
 
     def _restart_bulk_sample(self, message: str) -> None:
         if self.collection_prompt_var is not None:
@@ -790,17 +1064,17 @@ class KeystrokeAuthApp:
             self.collection_input_var.set("")
         if self.collection_input_entry is not None:
             self.collection_input_entry.configure(state="disabled")
-            
+
         if self.collection_capture_stop_event is not None:
             self.collection_capture_stop_event.set()
         if self.collection_capture_thread is not None:
             self.collection_capture_thread.join()
-            
+
         def resume():
             if self.collection_input_entry is not None:
                 self.collection_input_entry.configure(state="normal")
             self._begin_bulk_sample()
-            
+
         self.root.after(500, resume)
 
     def _on_bulk_collection_submit(self, event) -> str:
@@ -839,6 +1113,13 @@ class KeystrokeAuthApp:
             self._restart_bulk_sample("No audio captured. Please try again.")
             return
 
+        target_path = getattr(self, "collection_target_filepath", self.config.dataset_path)
+        try:
+            if Path(target_path).resolve() == Path(self.config.dataset_path).resolve():
+                audio = self._augment_training_audio(audio)
+        except Exception:
+            pass
+
         try:
             features = extract_46_features(
                 audio,
@@ -846,22 +1127,40 @@ class KeystrokeAuthApp:
                 self.config.sample_rate,
                 self.config.key_length,
                 self.config.histogram_bins,
-                keysyms=self.collection_capture_keysyms
+                keysyms=self.collection_capture_keysyms,
             )
-            target_path = getattr(self, 'collection_target_filepath', self.config.dataset_path)
             append_feature_row(target_path, features)
         except Exception as exc:
             self._restart_bulk_sample(f"Sample failed: {exc}")
             return
 
+        self.collection_session_sample_count += 1
         self.collection_current_index += 1
+        session_target = (
+            self.collection_session_plan[self.collection_session_index]
+            if self.collection_session_plan
+            and self.collection_session_index < len(self.collection_session_plan)
+            else self.collection_expected_count
+        )
+        if (
+            self.collection_session_sample_count >= session_target
+            and self.collection_current_index < self.collection_expected_count
+        ):
+            self._pause_bulk_session()
+            return
+
         if self.collection_current_index >= self.collection_expected_count:
             self._finish_bulk_collection()
         else:
             self._begin_bulk_sample()
 
     def _start_text_capture(
-        self, expected_text: str, mode: str, on_success=None, on_error=None, initial_status: str | None = None
+        self,
+        expected_text: str,
+        mode: str,
+        on_success=None,
+        on_error=None,
+        initial_status: str | None = None,
     ) -> None:
         if self.capture_active:
             self._set_status("A capture session is already running.")
@@ -967,7 +1266,7 @@ class KeystrokeAuthApp:
                 self.config.sample_rate,
                 self.config.key_length,
                 self.config.histogram_bins,
-                keysyms=self.capture_keysyms
+                keysyms=self.capture_keysyms,
             )
             return features
 
@@ -1001,8 +1300,10 @@ class KeystrokeAuthApp:
                     self.config.passphrase,
                     mode="login",
                     on_success=lambda features: self._handle_login_features(features),
-                    on_error=self.capture_error_callback if hasattr(self, 'capture_error_callback') and self.capture_error_callback else (lambda exc: self._set_status(str(exc))),
-                    initial_status="Ready. Type your passphrase."
+                    on_error=self.capture_error_callback
+                    if hasattr(self, "capture_error_callback") and self.capture_error_callback
+                    else (lambda exc: self._set_status(str(exc))),
+                    initial_status="Ready. Type your passphrase.",
                 )
 
         self.root.after(500, resume)
@@ -1011,7 +1312,7 @@ class KeystrokeAuthApp:
         if not self.capture_active or self.capture_input_var is None:
             return
 
-        if event.widget != self.capture_input_entry:
+        if event.widget != self.capture_input_entry and event.widget != getattr(self.capture_input_entry, "_entry", None):
             return
 
         if self._is_valid_biometric_key(event):
@@ -1022,7 +1323,7 @@ class KeystrokeAuthApp:
         if not self.capture_active or self.capture_input_var is None:
             return
 
-        if event.widget != self.capture_input_entry:
+        if event.widget != self.capture_input_entry and event.widget != getattr(self.capture_input_entry, "_entry", None):
             return
 
         current_text = self.capture_input_var.get()
@@ -1162,12 +1463,20 @@ class KeystrokeAuthApp:
         dataset_path = Path(dataset_text or self.config.dataset_path)
 
         try:
-            algorithm_value = self.model_algorithm_var.get().strip() if hasattr(self, 'model_algorithm_var') else "lof"
+            algorithm_value = (
+                self.model_algorithm_var.get().strip()
+                if hasattr(self, "model_algorithm_var")
+                else "lof"
+            )
             if algorithm_value in ("lof", "iforest"):
-                nu_value = float(self.model_contamination_var.get().strip()) if hasattr(self, 'model_contamination_var') else 0.05
+                nu_value = (
+                    float(self.model_contamination_var.get().strip())
+                    if hasattr(self, "model_contamination_var")
+                    else 0.05
+                )
             else:
                 nu_value = float(self.model_nu_var.get().strip()) if self.model_nu_var else 0.1
-                
+
             gamma_text = self.model_gamma_var.get().strip() if self.model_gamma_var else "scale"
             gamma_value: str | float
             if gamma_text.lower() in {"scale", "auto"}:
@@ -1179,8 +1488,16 @@ class KeystrokeAuthApp:
             return
 
         try:
-            n_estimators_value = int(self.model_n_estimators_var.get().strip()) if hasattr(self, 'model_n_estimators_var') else 100
-            n_components_value = int(self.model_n_components_var.get().strip()) if hasattr(self, 'model_n_components_var') else 5
+            n_estimators_value = (
+                int(self.model_n_estimators_var.get().strip())
+                if hasattr(self, "model_n_estimators_var")
+                else 100
+            )
+            n_components_value = (
+                int(self.model_n_components_var.get().strip())
+                if hasattr(self, "model_n_components_var")
+                else 5
+            )
         except ValueError:
             n_estimators_value = 100
             n_components_value = 5
@@ -1211,9 +1528,17 @@ class KeystrokeAuthApp:
     def load_model(self) -> None:
         try:
             from keystroke_auth.modeling import load_artifacts
-            
-            model_path = self.auth_model_path_var.get().strip() if hasattr(self, 'auth_model_path_var') else self.config.model_path
-            scaler_path = self.auth_scaler_path_var.get().strip() if hasattr(self, 'auth_scaler_path_var') else self.config.scaler_path
+
+            model_path = (
+                self.auth_model_path_var.get().strip()
+                if hasattr(self, "auth_model_path_var")
+                else self.config.model_path
+            )
+            scaler_path = (
+                self.auth_scaler_path_var.get().strip()
+                if hasattr(self, "auth_scaler_path_var")
+                else self.config.scaler_path
+            )
 
             self.model_loaded = load_artifacts(model_path, scaler_path)
             self._set_status("Model loaded successfully.")
@@ -1277,7 +1602,10 @@ class KeystrokeAuthApp:
 
         self.auth_dialog_status_var = ctk.StringVar(value="")
         ctk.CTkLabel(
-            frame, textvariable=self.auth_dialog_status_var, text_color="red", font=ctk.CTkFont(size=14, weight="bold")
+            frame,
+            textvariable=self.auth_dialog_status_var,
+            text_color="red",
+            font=ctk.CTkFont(size=14, weight="bold"),
         ).pack(anchor="w", padx=16, pady=(0, 8))
 
         self.auth_passphrase_var = ctk.StringVar(value="")
@@ -1285,6 +1613,7 @@ class KeystrokeAuthApp:
         auth_entry.pack(anchor="w", padx=16, pady=(0, 12))
         self.capture_input_var = self.auth_passphrase_var
         self.capture_input_entry = auth_entry
+
         def on_error(exc):
             self._set_status(f"Error: {exc}")
 
@@ -1312,8 +1641,10 @@ class KeystrokeAuthApp:
 
         captured_text = self.capture_input_var.get().strip()
         if not self.capture_active or captured_text != self.config.passphrase.strip():
-            if hasattr(self, 'auth_dialog_status_var'):
-                self.auth_dialog_status_var.set("Input Error: Passphrase incorrect or typing error detected. Please re-input.")
+            if hasattr(self, "auth_dialog_status_var"):
+                self.auth_dialog_status_var.set(
+                    "Input Error: Passphrase incorrect or typing error detected. Please re-input."
+                )
             self.capture_active = False
             self.root.unbind_all("<KeyPress>")
             self.root.unbind_all("<KeyRelease>")
@@ -1321,13 +1652,15 @@ class KeystrokeAuthApp:
                 self.capture_audio_stop_event.set()
             if self.capture_audio_thread is not None:
                 self.capture_audio_thread.join()
-                
+
             self.capture_input_var.set("")
             self._start_text_capture(
                 self.config.passphrase,
                 mode="login",
                 on_success=lambda features: self._handle_login_features(features),
-                on_error=self.capture_error_callback if hasattr(self, 'capture_error_callback') and self.capture_error_callback else (lambda exc: self._set_status(str(exc)))
+                on_error=self.capture_error_callback
+                if hasattr(self, "capture_error_callback") and self.capture_error_callback
+                else (lambda exc: self._set_status(str(exc))),
             )
             return "break"
 
@@ -1354,7 +1687,30 @@ class KeystrokeAuthApp:
 
     def _handle_login_features(self, features) -> None:
         try:
-            prediction = predict_with_artifacts(self.model_loaded, features)
+            threshold_text = (
+                self.auth_threshold_var.get().strip()
+                if self.auth_threshold_var is not None
+                else str(self.config.auth_threshold)
+            )
+            try:
+                threshold = float(threshold_text)
+            except ValueError:
+                threshold = float(self.config.auth_threshold)
+                if self.auth_threshold_var is not None:
+                    self.auth_threshold_var.set(f"{threshold:.6f}")
+            self.config.auth_threshold = threshold
+            save_config(self.config, self.config_path)
+
+            from keystroke_auth.modeling import score_with_artifacts
+
+            score = score_with_artifacts(self.model_loaded, features)
+            # print numeric score to terminal for debugging/inspection
+            print(f"Model decision score: {score:.6f} (threshold: {threshold:.6f})")
+            if hasattr(self, "auth_dialog_status_var") and self.auth_dialog_status_var is not None:
+                self.auth_dialog_status_var.set(f"Score: {score:.6f} (threshold {threshold:.6f})")
+            self._set_status(f"Model score: {score:.6f} (threshold {threshold:.6f})")
+
+            prediction = 1 if score > threshold else -1
         except Exception as exc:
             self._set_status(f"Prediction failed: {exc}")
             if self.capture_input_entry is not None:
@@ -1373,14 +1729,16 @@ class KeystrokeAuthApp:
         self.pending_otp = generate_otp(self.config.otp_digits)
 
         email_recipient = self.email_var.get().strip()
-        is_test_mode = self.test_mode_var.get() if hasattr(self, 'test_mode_var') else False
+        is_test_mode = self.test_mode_var.get() if hasattr(self, "test_mode_var") else False
 
         def send_task() -> None:
             self.config.smtp_recipient = email_recipient or self.config.smtp_recipient
             send_otp_email(self.config, self.pending_otp, test_mode=is_test_mode)
 
         def on_success(_) -> None:
-            self._set_status("Model rejected input. OTP interface opened. (Check terminal if in Test Mode)")
+            self._set_status(
+                "Model rejected input. OTP interface opened. (Check terminal if in Test Mode)"
+            )
 
         def on_error(exc) -> None:
             self._set_status(f"OTP fallback unavailable: {exc}")
@@ -1404,7 +1762,7 @@ class KeystrokeAuthApp:
             return
 
         if self.auth_otp_entry is not None:
-            self.auth_otp_entry.delete(0, 'end')
+            self.auth_otp_entry.delete(0, "end")
             self.auth_otp_entry.focus_set()
         self._set_status("OTP mismatch. Access denied.")
 

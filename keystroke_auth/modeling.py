@@ -4,12 +4,10 @@ import csv
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import OneClassSVM
 
 FEATURE_COLUMNS = [f"f{i}" for i in range(1, 47)]
 
@@ -73,43 +71,107 @@ def train_one_class_model(
 
     scaler = StandardScaler()
     scaled = scaler.fit_transform(features)
-    
+
     algo_lower = algorithm.lower()
-    
+
     if algo_lower == "lof":
         from sklearn.neighbors import LocalOutlierFactor
+
         n_neighbors = min(5, features.shape[0] - 1)
         if n_neighbors < 1:
             n_neighbors = 1
         contamination = max(min(nu, 0.5), 0.001)
-        model = LocalOutlierFactor(n_neighbors=n_neighbors, novelty=True, contamination=contamination)
+        model = LocalOutlierFactor(
+            n_neighbors=n_neighbors, novelty=True, contamination=contamination
+        )
     elif algo_lower == "iforest":
         from sklearn.ensemble import IsolationForest
+
         contamination = max(min(nu, 0.5), 0.001)
-        model = IsolationForest(n_estimators=n_estimators, contamination=contamination, random_state=42)
+        model = IsolationForest(
+            n_estimators=n_estimators, contamination=contamination, random_state=42
+        )
     elif algo_lower == "pca_svm":
-        from sklearn.svm import OneClassSVM
         from sklearn.decomposition import PCA
         from sklearn.pipeline import make_pipeline
+        from sklearn.svm import OneClassSVM
+
         actual_components = min(n_components, features.shape[0], features.shape[1])
         if actual_components < 1:
             actual_components = 1
         model = make_pipeline(
             PCA(n_components=actual_components),
-            OneClassSVM(nu=nu, kernel=kernel, gamma=gamma, degree=degree, coef0=coef0)
+            OneClassSVM(nu=nu, kernel=kernel, gamma=gamma, degree=degree, coef0=coef0),
         )
     else:
         from sklearn.svm import OneClassSVM
+
         model = OneClassSVM(nu=nu, kernel=kernel, gamma=gamma, degree=degree, coef0=coef0)
-        
+
     model.fit(scaled)
     return OneClassArtifacts(scaler=scaler, model=model, feature_columns=FEATURE_COLUMNS.copy())
 
 
-def predict_with_artifacts(artifacts: OneClassArtifacts, feature_vector: Sequence[float]) -> int:
+def score_with_artifacts(artifacts: OneClassArtifacts, feature_vector: Sequence[float]) -> float:
     features = np.asarray(feature_vector, dtype=np.float64).reshape(1, -1)
     scaled = artifacts.scaler.transform(features)
-    return int(artifacts.model.predict(scaled)[0])
+    if not hasattr(artifacts.model, "decision_function"):
+        raise AttributeError("Loaded model does not support decision_function")
+    return float(np.asarray(artifacts.model.decision_function(scaled)).reshape(-1)[0])
+
+
+def predict_with_artifacts(
+    artifacts: OneClassArtifacts,
+    feature_vector: Sequence[float],
+    threshold: float = 0.0,
+) -> int:
+    return 1 if score_with_artifacts(artifacts, feature_vector) > threshold else -1
+
+
+def calibrate_auth_threshold(
+    owner_scores: Sequence[float] | np.ndarray,
+    imposter_scores: Sequence[float] | np.ndarray,
+) -> tuple[float, float, float]:
+    owner = np.asarray(owner_scores, dtype=np.float64).reshape(-1)
+    imposter = np.asarray(imposter_scores, dtype=np.float64).reshape(-1)
+
+    if owner.size == 0 or imposter.size == 0:
+        return 0.0, 0.0, 0.0
+
+    score_pool = np.unique(np.concatenate([owner, imposter]))
+    if score_pool.size == 1:
+        threshold = float(score_pool[0])
+        far = float(np.mean(imposter > threshold))
+        frr = float(np.mean(owner <= threshold))
+        return threshold, far, frr
+
+    candidates = np.concatenate(
+        [
+            np.array([score_pool[0] - 1e-9], dtype=np.float64),
+            (score_pool[:-1] + score_pool[1:]) / 2.0,
+            np.array([score_pool[-1] + 1e-9], dtype=np.float64),
+        ]
+    )
+
+    best_threshold = float(candidates[0])
+    best_far = float(np.mean(imposter > best_threshold))
+    best_frr = float(np.mean(owner <= best_threshold))
+    best_gap = abs(best_far - best_frr)
+    best_error = best_far + best_frr
+
+    for threshold in candidates[1:]:
+        far = float(np.mean(imposter > threshold))
+        frr = float(np.mean(owner <= threshold))
+        gap = abs(far - frr)
+        error = far + frr
+        if (gap < best_gap) or (np.isclose(gap, best_gap) and error < best_error):
+            best_threshold = float(threshold)
+            best_far = far
+            best_frr = frr
+            best_gap = gap
+            best_error = error
+
+    return best_threshold, best_far, best_frr
 
 
 def save_artifacts(

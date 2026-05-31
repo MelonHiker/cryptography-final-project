@@ -15,6 +15,9 @@ class AppConfig:
     calibrated: bool = False
     passphrase: str = "cryptography final project"
     histogram_bins: int = 40
+    auth_threshold: float = 0.0
+    collection_session_count: int = 4
+    white_noise_std: float = 0.0015
     otp_digits: int = 6
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
