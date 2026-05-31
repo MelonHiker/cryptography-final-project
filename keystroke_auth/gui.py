@@ -190,6 +190,13 @@ class KeystrokeAuthApp:
             "Stage 1 Calibration",
             "Press the space bar 3 times with a normal force. The app will estimate the fixed key-sound length L and persist it in config.json.",
         )
+        
+        self.calibration_sample_rate_var = ctk.StringVar(value=str(self.config.sample_rate))
+        param_frame = ctk.CTkFrame(card, fg_color="transparent")
+        param_frame.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkLabel(param_frame, text="Sample Rate (Hz):", anchor="w").pack(side="left", padx=(0, 8))
+        ctk.CTkEntry(param_frame, textvariable=self.calibration_sample_rate_var, width=100).pack(side="left")
+
         ctk.CTkButton(card, text="Run Calibration", command=self.run_calibration).pack(
             anchor="w", padx=16, pady=(0, 16)
         )
@@ -880,6 +887,13 @@ class KeystrokeAuthApp:
     def run_calibration(self) -> None:
         if self.calibration_active:
             self._set_status("Calibration is already running.")
+            return
+
+        try:
+            sample_rate = int(self.calibration_sample_rate_var.get().strip())
+            self.config.sample_rate = sample_rate
+        except ValueError:
+            self._set_status("Sample rate must be a valid integer (e.g., 44100 or 48000).")
             return
 
         self._set_status("Calibration started. Focus the app and press space 3 times.")

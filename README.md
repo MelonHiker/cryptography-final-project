@@ -76,6 +76,22 @@ To enable the One-Time Password (OTP) fallback when the AI model rejects a valid
 
 ---
 
+### 🧠 Model Tuning & Training Precautions
+
+Due to the nature of high-dimensional feature spaces (46-D) and typical small sample sizes, the One-Class SVM can easily **overfit**, resulting in a decision boundary that is too strict. If you find the model rejecting your input almost every time in Stage 5, follow these critical tuning steps:
+
+> [!TIP]
+> **Loosen the Decision Boundary (Stage 4 Tuning)**
+> *   **Lower `nu` ($\nu$)**: The default `nu=0.1` forces the model to treat 10% of your training data as outliers. In a 20-sample dataset, this makes the boundary extremely tight. Change `nu` to **`0.01`** or **`0.005`** to make the model more inclusive of all your training data.
+> *   **Lower `gamma` ($\gamma$)**: The default `scale` can sometimes compute a value that makes the RBF kernel's influence radius too narrow (creating "isolated islands" of acceptance). Manually set `gamma` to a smaller float like **`0.001`** or **`0.0005`** to create a wider, smoother decision landscape.
+
+> [!IMPORTANT]
+> **Data Collection Consistency (Stage 3)**
+> *   **Typing Consistency**: It doesn't matter if you type fast or slow, what matters is **consistency**. Try to type at your most natural, repeatable rhythm. If your typing speed fluctuates wildly during data collection, the feature variance will explode.
+> *   **Environmental Noise**: 32 of the 46 features are acoustic (MFCCs). Record your samples in a **quiet environment**. Air conditioners blowing directly into the mic, breathing heavily, or people talking in the background will drastically alter the acoustic features and cause false rejections.
+
+---
+
 ### 🔐 Testing & Authentication
 
 1.  Navigate to **Stage 5: Authentication**.
