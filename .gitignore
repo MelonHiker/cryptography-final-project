@@ -188,7 +188,7 @@ dmypy.json
 
 # Project artifacts
 config.json
-dataset.csv
+*.csv
 model.pkl
 scaler.pkl
 otp_cache.json

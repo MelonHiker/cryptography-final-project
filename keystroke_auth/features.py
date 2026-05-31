@@ -153,9 +153,19 @@ def extract_46_features(
     sample_rate: int,
     key_length: int,
     histogram_bins: int = 40,
+    keysyms: Sequence[str] | None = None,
 ) -> np.ndarray:
     signal = _to_float_array(audio)
     timestamps = _to_float_array(timestamps_sec)
+    
+    # Trim the ambient noise/silence before the first keystroke
+    if timestamps.size > 0:
+        trim_sec = max(float(timestamps[0]) - 0.5, 0.0)
+        trim_samples = int(trim_sec * sample_rate)
+        if 0 < trim_samples < signal.size:
+            signal = signal[trim_samples:]
+            timestamps = timestamps - trim_sec
+
     if timestamps.size == 0:
         timestamps = np.zeros(0, dtype=np.float64)
 
@@ -176,10 +186,22 @@ def extract_46_features(
 
     if timestamps.size >= 2:
         diffs = np.diff(timestamps)
+        if keysyms is not None and len(keysyms) == timestamps.size:
+            keep_diff = np.ones(len(diffs), dtype=bool)
+            for i, sym in enumerate(keysyms):
+                if sym == "BackSpace":
+                    if i - 1 >= 0:
+                        keep_diff[i - 1] = False
+                    if i < len(diffs):
+                        keep_diff[i] = False
+            purified_diffs = diffs[keep_diff]
+            diffs_for_stats = purified_diffs if purified_diffs.size > 0 else diffs
+        else:
+            diffs_for_stats = diffs
     else:
-        diffs = np.zeros(0, dtype=np.float64)
+        diffs_for_stats = np.zeros(0, dtype=np.float64)
 
-    timing_mean, timing_std, timing_max, timing_min, timing_mode, timing_median = _safe_stats(diffs)
+    timing_mean, timing_std, timing_max, timing_min, timing_mode, timing_median = _safe_stats(diffs_for_stats)
     key_count = float(timestamps.size)
     total_time = float(timestamps[-1] - timestamps[0]) if timestamps.size >= 2 else 0.0
 

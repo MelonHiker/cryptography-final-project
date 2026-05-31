@@ -13,7 +13,7 @@ class AppConfig:
     sample_rate: int = 44100
     key_length: int = 4500
     calibrated: bool = False
-    passphrase: str = "cryptographyfinalproject2026"
+    passphrase: str = "cryptography final project"
     histogram_bins: int = 40
     otp_digits: int = 6
     smtp_host: str = "smtp.gmail.com"

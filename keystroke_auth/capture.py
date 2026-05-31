@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Event, Thread
 from time import perf_counter, sleep
+from collections.abc import Callable
 
 import numpy as np
 
@@ -34,14 +35,24 @@ def _import_keyboard():
     return keyboard
 
 
+_SHARED_PYAUDIO = None
+
+def _get_shared_pyaudio():
+    global _SHARED_PYAUDIO
+    if _SHARED_PYAUDIO is None:
+        pyaudio = _import_pyaudio()
+        _SHARED_PYAUDIO = pyaudio.PyAudio()
+    return _SHARED_PYAUDIO
+
 class AudioRecorder:
     def __init__(self, sample_rate: int = 44100, chunk_size: int = 1024) -> None:
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size
 
-    def record_until(self, stop_event: Event) -> np.ndarray:
+    def record_until(self, stop_event: Event, on_start: Callable[[], None] | None = None) -> np.ndarray:
         pyaudio = _import_pyaudio()
-        audio_interface = pyaudio.PyAudio()
+        audio_interface = _get_shared_pyaudio()
+        
         stream = audio_interface.open(
             format=pyaudio.paInt16,
             channels=1,
@@ -50,15 +61,21 @@ class AudioRecorder:
             frames_per_buffer=self.chunk_size,
         )
 
+        if on_start is not None:
+            on_start()
+
         frames: list[np.ndarray] = []
         try:
             while not stop_event.is_set():
                 chunk = stream.read(self.chunk_size, exception_on_overflow=False)
                 frames.append(np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0)
         finally:
-            stream.stop_stream()
-            stream.close()
-            audio_interface.terminate()
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
+            # We do NOT terminate the shared audio_interface to prevent macOS CoreAudio HAL race conditions
 
         if not frames:
             return np.zeros(0, dtype=np.float32)
