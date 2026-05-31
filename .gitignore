@@ -186,6 +186,13 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
+# Project artifacts
+config.json
+dataset.csv
+model.pkl
+scaler.pkl
+otp_cache.json
+
 # Cython debug symbols
 cython_debug/
 
