@@ -1,0 +1,49 @@
+{
+  "config_path": "config.json",
+  "dataset_path": "dataset.csv",
+  "model_path": "model.pkl",
+  "scaler_path": "scaler.pkl",
+  "threshold": -0.008142403120763642,
+  "seed": 42,
+  "summaries": [
+    {
+      "name": "hydra_equivalent",
+      "attempts": 250,
+      "accepted": 0,
+      "acceptance_rate": 0.0,
+      "min_score": -1.218543326462982,
+      "mean_score": -0.6614025344637887,
+      "max_score": -0.4188162186552653,
+      "acoustic_mean_score": -1.1396901734681004,
+      "timing_mean_score": -0.023377977164896032,
+      "max_balance": 6.50234027091982,
+      "threshold": -0.008142403120763642
+    },
+    {
+      "name": "generative_timing",
+      "attempts": 250,
+      "accepted": 1,
+      "acceptance_rate": 0.004,
+      "min_score": -0.7391143997006329,
+      "mean_score": -0.09987226362255189,
+      "max_score": 0.14989913082798756,
+      "acoustic_mean_score": -0.077773004493959,
+      "timing_mean_score": -1.1405231185773177,
+      "max_balance": 43.66438011658102,
+      "threshold": -0.008142403120763642
+    },
+    {
+      "name": "acoustic_replay",
+      "attempts": 250,
+      "accepted": 5,
+      "acceptance_rate": 0.02,
+      "min_score": -0.40077115793675455,
+      "mean_score": 0.03993163535183248,
+      "max_score": 0.21765391375004772,
+      "acoustic_mean_score": 0.14149595246223773,
+      "timing_mean_score": -2.4477428410595814,
+      "max_balance": 40.89264741060584,
+      "threshold": -0.008142403120763642
+    }
+  ]
+}

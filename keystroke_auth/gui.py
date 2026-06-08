@@ -13,8 +13,10 @@ from .features import extract_46_features
 from .modeling import (
     append_feature_row,
     calibrate_auth_threshold,
+    evaluate_with_artifacts,
     load_feature_matrix,
     save_artifacts,
+    score_with_artifacts,
     train_one_class_model,
 )
 from .otp import generate_otp, send_otp_email
@@ -543,6 +545,7 @@ class KeystrokeAuthApp:
 
     def _evaluate_model(self) -> None:
         from keystroke_auth.modeling import (
+            evaluate_with_artifacts,
             load_artifacts,
             load_feature_matrix,
             score_with_artifacts,
@@ -583,8 +586,25 @@ class KeystrokeAuthApp:
                 self.eval_threshold_var.set(f"{threshold:.6f}")
             save_config(self.config, self.config_path)
 
-            owner_preds = [1 if score > threshold else -1 for score in owner_scores]
-            imposter_preds = [1 if score > threshold else -1 for score in imposter_scores]
+            owner_preds = [
+                1 if evaluate_with_artifacts(artifacts, row, threshold)["accepted"] else -1
+                for row in owner_matrix
+            ]
+            imposter_preds = [
+                1 if evaluate_with_artifacts(artifacts, row, threshold)["accepted"] else -1
+                for row in imposter_matrix
+            ]
+
+            actual_far = (
+                sum(1 for prediction in imposter_preds if prediction == 1) / len(imposter_preds)
+                if imposter_preds
+                else 0.0
+            )
+            actual_frr = (
+                sum(1 for prediction in owner_preds if prediction == -1) / len(owner_preds)
+                if owner_preds
+                else 0.0
+            )
 
             total_samples = len(owner_preds) + len(imposter_preds)
             correct = sum(1 for p in owner_preds if p == 1) + sum(
@@ -598,8 +618,11 @@ class KeystrokeAuthApp:
                 f"Owner Samples (True Positives targeted): {len(owner_preds)}\n"
                 f"Imposter Samples (True Negatives targeted): {len(imposter_preds)}\n\n"
                 f"AUTH_THRESHOLD: {threshold:.6f}\n"
-                f"FAR (False Acceptance Rate): {far * 100:.2f}%\n"
-                f"FRR (False Rejection Rate): {frr * 100:.2f}%\n"
+                f"Security Gates: joint + acoustic + timing + balance\n"
+                f"Joint Threshold FAR: {far * 100:.2f}%\n"
+                f"Joint Threshold FRR: {frr * 100:.2f}%\n"
+                f"Gated FAR (False Acceptance Rate): {actual_far * 100:.2f}%\n"
+                f"Gated FRR (False Rejection Rate): {actual_frr * 100:.2f}%\n"
                 f"Overall Accuracy: {accuracy * 100:.2f}%\n"
             )
             self.eval_results_var.set(results)
@@ -1701,16 +1724,48 @@ class KeystrokeAuthApp:
             self.config.auth_threshold = threshold
             save_config(self.config, self.config_path)
 
-            from keystroke_auth.modeling import score_with_artifacts
+            evaluation = evaluate_with_artifacts(self.model_loaded, features, threshold=threshold)
+            scores = evaluation["scores"]
+            score = float(scores["joint"])
+            acoustic_score = scores.get("acoustic")
+            timing_score = scores.get("timing")
+            balance_score = scores.get("balance")
+            threshold_map = evaluation["thresholds"]
 
-            score = score_with_artifacts(self.model_loaded, features)
-            # print numeric score to terminal for debugging/inspection
-            print(f"Model decision score: {score:.6f} (threshold: {threshold:.6f})")
+            print(
+                "Model decision scores: "
+                f"joint={score:.6f} (threshold: {threshold_map['joint']:.6f}), "
+                f"acoustic={acoustic_score:.6f} "
+                f"(threshold: {threshold_map.get('acoustic', float('-inf')):.6f})"
+                if acoustic_score is not None
+                else f"Model decision score: joint={score:.6f} (threshold: {threshold_map['joint']:.6f})"
+            )
             if hasattr(self, "auth_dialog_status_var") and self.auth_dialog_status_var is not None:
-                self.auth_dialog_status_var.set(f"Score: {score:.6f} (threshold {threshold:.6f})")
-            self._set_status(f"Model score: {score:.6f} (threshold {threshold:.6f})")
+                parts = [f"joint {score:.4f}/{threshold_map['joint']:.4f}"]
+                if acoustic_score is not None:
+                    parts.append(
+                        f"acoustic {acoustic_score:.4f}/{threshold_map.get('acoustic', float('-inf')):.4f}"
+                    )
+                if timing_score is not None:
+                    parts.append(
+                        f"timing {timing_score:.4f}/{threshold_map.get('timing', float('-inf')):.4f}"
+                    )
+                if balance_score is not None and "balance_max" in threshold_map:
+                    parts.append(
+                        f"balance {balance_score:.4f}<={threshold_map['balance_max']:.4f}"
+                    )
+                self.auth_dialog_status_var.set(" | ".join(parts))
 
-            prediction = 1 if score > threshold else -1
+            status_parts = [f"joint={score:.6f}"]
+            if acoustic_score is not None:
+                status_parts.append(f"acoustic={acoustic_score:.6f}")
+            if timing_score is not None:
+                status_parts.append(f"timing={timing_score:.6f}")
+            if balance_score is not None:
+                status_parts.append(f"balance={balance_score:.6f}")
+            self._set_status("Model scores: " + ", ".join(status_parts))
+
+            prediction = 1 if evaluation["accepted"] else -1
         except Exception as exc:
             self._set_status(f"Prediction failed: {exc}")
             if self.capture_input_entry is not None:
@@ -1725,6 +1780,7 @@ class KeystrokeAuthApp:
             self._set_status("Login successful.")
             return
 
+        failure_text = ", ".join(evaluation["failures"]) if evaluation["failures"] else "joint"
         self._set_status("Model rejected input. Enabling 2FA...")
         self.pending_otp = generate_otp(self.config.otp_digits)
 
@@ -1737,7 +1793,8 @@ class KeystrokeAuthApp:
 
         def on_success(_) -> None:
             self._set_status(
-                "Model rejected input. OTP interface opened. (Check terminal if in Test Mode)"
+                f"Model rejected input on {failure_text}. OTP interface opened. "
+                "(Check terminal if in Test Mode)"
             )
 
         def on_error(exc) -> None:
