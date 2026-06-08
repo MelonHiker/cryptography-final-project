@@ -16,6 +16,9 @@ class AppConfig:
     passphrase: str = "cryptography final project"
     histogram_bins: int = 40
     auth_threshold: float = 0.0
+    # False = loose: accept on the single fused OC-SVM score (lower false-reject).
+    # True  = strict: also require the acoustic / timing / balance gates to pass.
+    strict_mode: bool = False
     collection_session_count: int = 4
     white_noise_std: float = 0.0015
     otp_digits: int = 6

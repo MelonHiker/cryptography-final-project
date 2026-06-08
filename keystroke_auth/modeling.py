@@ -294,30 +294,47 @@ def evaluate_with_artifacts(
     artifacts: OneClassArtifacts,
     feature_vector: Sequence[float],
     threshold: float = 0.0,
+    strict: bool = False,
 ) -> dict[str, Any]:
+    """Decide accept/reject for one sample.
+
+    strict=False (default, "loose"): accept purely on the single fused OC-SVM
+        score vs ``threshold`` -- low false-reject rate, best for normal login.
+    strict=True ("multi-gate"): additionally require the acoustic, timing and
+        balance gates to pass. Much harder to spoof but rejects more legitimate
+        owners (higher FRR). Use for high-security demos / analysis.
+    """
     scores = score_breakdown_with_artifacts(artifacts, feature_vector)
-    active_thresholds = {
-        "joint": max(float(threshold), float(artifacts.score_thresholds.get("joint", threshold)))
-    }
     failures: list[str] = []
 
-    if scores["joint"] <= active_thresholds["joint"]:
+    if strict:
+        joint_threshold = max(
+            float(threshold), float(artifacts.score_thresholds.get("joint", threshold))
+        )
+    else:
+        joint_threshold = float(threshold)
+    active_thresholds = {"joint": joint_threshold}
+
+    if scores["joint"] <= joint_threshold:
         failures.append("joint")
 
-    if "acoustic" in scores:
-        active_thresholds["acoustic"] = float(artifacts.score_thresholds.get("acoustic", -np.inf))
-        if scores["acoustic"] <= active_thresholds["acoustic"]:
-            failures.append("acoustic")
+    if strict:
+        if "acoustic" in scores:
+            active_thresholds["acoustic"] = float(
+                artifacts.score_thresholds.get("acoustic", -np.inf)
+            )
+            if scores["acoustic"] <= active_thresholds["acoustic"]:
+                failures.append("acoustic")
 
-    if "timing" in scores:
-        active_thresholds["timing"] = float(artifacts.score_thresholds.get("timing", -np.inf))
-        if scores["timing"] <= active_thresholds["timing"]:
-            failures.append("timing")
+        if "timing" in scores:
+            active_thresholds["timing"] = float(artifacts.score_thresholds.get("timing", -np.inf))
+            if scores["timing"] <= active_thresholds["timing"]:
+                failures.append("timing")
 
-    if "balance" in scores and "balance_max" in artifacts.score_thresholds:
-        active_thresholds["balance_max"] = float(artifacts.score_thresholds["balance_max"])
-        if scores["balance"] > active_thresholds["balance_max"]:
-            failures.append("balance")
+        if "balance" in scores and "balance_max" in artifacts.score_thresholds:
+            active_thresholds["balance_max"] = float(artifacts.score_thresholds["balance_max"])
+            if scores["balance"] > active_thresholds["balance_max"]:
+                failures.append("balance")
 
     return {
         "accepted": not failures,

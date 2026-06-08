@@ -55,7 +55,12 @@ def _clip_like_training(samples: np.ndarray, training: np.ndarray) -> np.ndarray
 def _score_samples(artifacts, samples: np.ndarray, threshold: float):
     from keystroke_auth.modeling import evaluate_with_artifacts
 
-    evaluations = [evaluate_with_artifacts(artifacts, row, threshold=threshold) for row in samples]
+    # Attack simulation always exercises the full multi-gate defense (strict=True)
+    # so the reported acceptance rates reflect the strongest configuration.
+    evaluations = [
+        evaluate_with_artifacts(artifacts, row, threshold=threshold, strict=True)
+        for row in samples
+    ]
     joint_scores = np.array([item["scores"]["joint"] for item in evaluations], dtype=np.float64)
     accepted = int(sum(1 for item in evaluations if item["accepted"]))
 

@@ -15,7 +15,7 @@ The project consists of the following key modules:
   - `gui.py`: The dashboard implemented using **CustomTkinter**, featuring a modern dark-theme user interface.
   - `capture.py`: Low-level background hooks for multi-threaded audio (`pyaudio`) and global key-event tracking (`pynput`).
   - `features.py`: Advanced feature-engineering pipeline extracting timing statistics and 13-frame acoustic Mel-Frequency Cepstral Coefficients (MFCCs).
-  - `model.py`: OC-SVM pipeline (with RBF Kernel) handles dataset formatting, hyperparameter scaling, and training.
+  - `modeling.py`: OC-SVM pipeline (with RBF Kernel) handles dataset formatting, hyperparameter scaling, and training. On this branch it also trains separate **acoustic** and **timing** sub-models and fuses their decisions.
   - `otp.py`: SMTP-based multi-factor authentication (MFA) fallback system.
   - `config.py`: Local JSON state-management for credentials and hardware profiles.
 
@@ -32,7 +32,42 @@ brew install portaudio
 pip install -r requirements.txt
 ```
 
-### 2. Required Operating System Permissions (CRITICAL)
+### 1b. System Dependencies (Windows)
+
+On Windows the GUI/audio stack works best on **Python 3.11 or 3.12** (PyAudio has no
+prebuilt wheels for 3.13+ yet). Set up an isolated environment:
+
+```powershell
+# Create and activate a virtual environment with Python 3.12
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1   # in cmd.exe use: .\.venv\Scripts\activate.bat
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+If `pip install pyaudio` fails to build, install a prebuilt wheel instead:
+
+```powershell
+python -m pip install pipwin
+pipwin install pyaudio
+```
+
+> [!NOTE]
+> **Headless smoke test (no microphone / no GUI):** to verify the core
+> feature-extraction + modeling pipeline you only need `numpy` and
+> `scikit-learn`, then run `python smoke_test.py`. To reproduce the report
+> figures (ROC / histograms / ablation) also install `matplotlib` and run
+> `python -m experiments.run_experiments`.
+
+> [!IMPORTANT]
+> **Windows permissions:** `pynput`'s global keyboard listener does not need
+> macOS-style Accessibility permissions, but antivirus / Controlled Folder
+> Access may block it. Allow Python through **Microphone privacy settings**
+> (`Settings -> Privacy & security -> Microphone -> Let desktop apps access
+> your microphone`) so PyAudio can record key-press sounds.
+
+### 2. Required Operating System Permissions (macOS, CRITICAL)
 
 Because this app runs low-level global input listeners and audio recording hooks, you **MUST** grant permissions to your terminal or IDE:
 

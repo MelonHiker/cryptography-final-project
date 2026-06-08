@@ -413,15 +413,35 @@ class KeystrokeAuthApp:
             anchor="w", padx=16, pady=(0, 12)
         )
 
-        ctk.CTkLabel(card, text="Recipient Gmail (for 2FA):", anchor="w", justify="left").pack(
-            anchor="w", padx=16, pady=(0, 4)
-        )
-        ctk.CTkEntry(card, textvariable=self.auth_gmail_var, width=520).pack(
-            anchor="w", padx=16, pady=(0, 12)
-        )
+        ctk.CTkLabel(
+            card,
+            text="2FA recipient (read-only; configure in the Settings tab):",
+            anchor="w",
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(0, 4))
+        # Read-only: the OTP destination is the enrolled owner's email and cannot be
+        # changed at login time, so an attacker cannot redirect the OTP to themselves.
+        ctk.CTkEntry(
+            card, textvariable=self.auth_gmail_var, width=520, state="disabled"
+        ).pack(anchor="w", padx=16, pady=(0, 12))
 
         ctk.CTkCheckBox(
             card, text="Test Mode (Disable actual SMTP email sending)", variable=self.test_mode_var
+        ).pack(anchor="w", padx=16, pady=(0, 12))
+
+        self.strict_mode_var = ctk.BooleanVar(value=bool(self.config.strict_mode))
+
+        def _on_strict_toggle() -> None:
+            self.config.strict_mode = bool(self.strict_mode_var.get())
+            save_config(self.config, self.config_path)
+            mode = "strict multi-gate" if self.config.strict_mode else "loose (single fusion)"
+            self._set_status(f"Decision mode: {mode}.")
+
+        ctk.CTkCheckBox(
+            card,
+            text="Strict multi-gate mode (more secure, but rejects more real users)",
+            variable=self.strict_mode_var,
+            command=_on_strict_toggle,
         ).pack(anchor="w", padx=16, pady=(0, 12))
 
         ctk.CTkLabel(card, text="AUTH_THRESHOLD:", anchor="w", justify="left").pack(
@@ -586,12 +606,15 @@ class KeystrokeAuthApp:
                 self.eval_threshold_var.set(f"{threshold:.6f}")
             save_config(self.config, self.config_path)
 
+            strict = bool(self.config.strict_mode)
             owner_preds = [
-                1 if evaluate_with_artifacts(artifacts, row, threshold)["accepted"] else -1
+                1 if evaluate_with_artifacts(artifacts, row, threshold, strict=strict)["accepted"]
+                else -1
                 for row in owner_matrix
             ]
             imposter_preds = [
-                1 if evaluate_with_artifacts(artifacts, row, threshold)["accepted"] else -1
+                1 if evaluate_with_artifacts(artifacts, row, threshold, strict=strict)["accepted"]
+                else -1
                 for row in imposter_matrix
             ]
 
@@ -640,6 +663,7 @@ class KeystrokeAuthApp:
         self.smtp_port_var = ctk.StringVar(value=str(self.config.smtp_port))
         self.smtp_username_var = ctk.StringVar(value=self.config.smtp_username)
         self.smtp_password_var = ctk.StringVar(value=self.config.smtp_password)
+        self.smtp_recipient_var = ctk.StringVar(value=self.config.smtp_recipient)
         self.collection_session_count_var = ctk.StringVar(
             value=str(self.config.collection_session_count)
         )
@@ -651,6 +675,7 @@ class KeystrokeAuthApp:
             ("SMTP Port:", self.smtp_port_var, False),
             ("SMTP Sender Username:", self.smtp_username_var, False),
             ("SMTP Sender Password (App Password):", self.smtp_password_var, True),
+            ("Owner Recipient Email (fixed 2FA destination):", self.smtp_recipient_var, False),
         ]
 
         for label_text, str_var, is_password in fields:
@@ -694,6 +719,11 @@ class KeystrokeAuthApp:
                 return
             self.config.smtp_username = self.smtp_username_var.get().strip()
             self.config.smtp_password = self.smtp_password_var.get().strip()
+            # The 2FA recipient is the OWNER's address, fixed here at enrollment so it
+            # can NOT be changed on the login screen (prevents OTP redirection).
+            self.config.smtp_recipient = self.smtp_recipient_var.get().strip()
+            if self.auth_gmail_var is not None:
+                self.auth_gmail_var.set(self.config.smtp_recipient)
 
             try:
                 self.config.collection_session_count = int(
@@ -1695,13 +1725,17 @@ class KeystrokeAuthApp:
         if self.model_loaded is None:
             return
 
-        gmail_value = self.auth_gmail_var.get().strip()
+        # Use the OWNER's enrolled recipient from config (set in the Settings tab),
+        # NOT a value typed on the login screen. This prevents an attacker who knows
+        # the passphrase from redirecting the 2FA OTP to their own inbox.
+        gmail_value = self.config.smtp_recipient.strip()
         if not gmail_value:
-            self._set_status("Gmail cannot be empty.")
+            self._set_status("No 2FA recipient configured. Set it in the Settings tab first.")
             return
 
         self.email_var.set(gmail_value)
-        self.config.smtp_recipient = gmail_value
+        if self.auth_gmail_var is not None:
+            self.auth_gmail_var.set(gmail_value)
         self.config.extra["test_mode"] = self.test_mode_var.get()
 
         self._hide_otp_interface()
@@ -1724,7 +1758,9 @@ class KeystrokeAuthApp:
             self.config.auth_threshold = threshold
             save_config(self.config, self.config_path)
 
-            evaluation = evaluate_with_artifacts(self.model_loaded, features, threshold=threshold)
+            evaluation = evaluate_with_artifacts(
+                self.model_loaded, features, threshold=threshold, strict=bool(self.config.strict_mode)
+            )
             scores = evaluation["scores"]
             score = float(scores["joint"])
             acoustic_score = scores.get("acoustic")
