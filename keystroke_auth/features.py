@@ -4,6 +4,8 @@ from typing import Sequence
 
 import numpy as np
 
+EDIT_DELETE_KEYSYMS = {"BackSpace", "Backspace"}
+
 
 def _to_float_array(values: Sequence[float] | np.ndarray) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64)
@@ -178,6 +180,57 @@ def _histogram_features(values: np.ndarray, bins: int) -> tuple[float, float]:
     return msc, mfc
 
 
+def purify_edit_events(
+    timestamps_sec: Sequence[float] | np.ndarray,
+    keysyms: Sequence[str] | None,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Replay Backspace edits and keep only the final passphrase key events."""
+    timestamps = _to_float_array(timestamps_sec)
+    if keysyms is None or len(keysyms) != timestamps.size:
+        return timestamps, timestamps, list(keysyms or [])
+
+    kept: list[tuple[float, float, str]] = []
+    removed_duration = 0.0
+    deletion_start: float | None = None
+    deletion_end: float | None = None
+
+    for timestamp, keysym in zip(timestamps, keysyms):
+        original_timestamp = float(timestamp)
+
+        if keysym in EDIT_DELETE_KEYSYMS:
+            if kept:
+                deleted_original_timestamp, _deleted_effective_timestamp, _deleted_keysym = (
+                    kept.pop()
+                )
+                previous_kept_timestamp = (
+                    kept[-1][0] if kept else deleted_original_timestamp
+                )
+                deletion_start = (
+                    previous_kept_timestamp
+                    if deletion_start is None
+                    else min(deletion_start, previous_kept_timestamp)
+                )
+                deletion_end = original_timestamp
+            continue
+
+        if deletion_start is not None and deletion_end is not None:
+            removed_duration += max(deletion_end - deletion_start, 0.0)
+            deletion_start = None
+            deletion_end = None
+
+        effective_timestamp = original_timestamp - removed_duration
+        kept.append((original_timestamp, effective_timestamp, keysym))
+
+    if not kept:
+        empty = np.zeros(0, dtype=np.float64)
+        return empty, empty, []
+
+    acoustic_timestamps = np.array([item[0] for item in kept], dtype=np.float64)
+    timing_timestamps = np.array([item[1] for item in kept], dtype=np.float64)
+    purified_keysyms = [item[2] for item in kept]
+    return acoustic_timestamps, timing_timestamps, purified_keysyms
+
+
 def extract_46_features(
     audio: Sequence[float] | np.ndarray,
     timestamps_sec: Sequence[float] | np.ndarray,
@@ -185,9 +238,15 @@ def extract_46_features(
     key_length: int,
     histogram_bins: int = 40,
     keysyms: Sequence[str] | None = None,
+    expected_key_count: int | None = None,
 ) -> np.ndarray:
     signal = _to_float_array(audio)
     timestamps = _to_float_array(timestamps_sec)
+    timestamps, timing_timestamps, _purified_keysyms = purify_edit_events(timestamps, keysyms)
+    if expected_key_count is not None and timestamps.size != int(expected_key_count):
+        raise ValueError(
+            f"Expected {int(expected_key_count)} effective key events, got {timestamps.size}"
+        )
 
     # Trim the ambient noise/silence before the first keystroke
     if timestamps.size > 0:
@@ -196,9 +255,11 @@ def extract_46_features(
         if 0 < trim_samples < signal.size:
             signal = signal[trim_samples:]
             timestamps = timestamps - trim_sec
+            timing_timestamps = timing_timestamps - trim_sec
 
     if timestamps.size == 0:
         timestamps = np.zeros(0, dtype=np.float64)
+        timing_timestamps = np.zeros(0, dtype=np.float64)
 
     alignment_window_sec = 0.05
     aligned_segments = [
@@ -232,24 +293,16 @@ def extract_46_features(
     )
     msc, mfc = _histogram_features(energies, histogram_bins)
 
-    if timestamps.size >= 2:
-        diffs = np.diff(timestamps)
-        if keysyms is not None and len(keysyms) == timestamps.size:
-            keep_diff = np.ones(len(diffs), dtype=bool)
-            for i, sym in enumerate(keysyms):
-                if sym == "BackSpace":
-                    if i - 1 >= 0:
-                        keep_diff[i - 1] = False
-                    if i < len(diffs):
-                        keep_diff[i] = False
-            purified_diffs = diffs[keep_diff]
-            diffs_for_stats = purified_diffs if purified_diffs.size > 0 else diffs
-        else:
-            diffs_for_stats = diffs
+    if timing_timestamps.size >= 2:
+        diffs_for_stats = np.diff(timing_timestamps)
     else:
         diffs_for_stats = np.zeros(0, dtype=np.float64)
 
-    total_time = float(timestamps[-1] - timestamps[0]) if timestamps.size >= 2 else 0.0
+    total_time = (
+        float(timing_timestamps[-1] - timing_timestamps[0])
+        if timing_timestamps.size >= 2
+        else 0.0
+    )
     if total_time > 0.0:
         diffs_for_stats = diffs_for_stats / total_time
 

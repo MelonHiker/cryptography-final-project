@@ -65,8 +65,8 @@ To enable the One-Time Password (OTP) fallback when the AI model rejects a valid
 
 1.  **Stage 1: Calibration**
     - Start the app: `python main.py`.
-    - Click **Start Calibration** and tap the **Space Bar 3 times**.
-    - The app measures your acoustic key-sound decay speed to determine a personalized audio frame length and saves it dynamically.
+    - Click **Start Calibration** and tap the **Space Bar 7 times**, waiting for the cooldown between presses.
+    - The app measures your acoustic key-sound decay speed from 7 spaced space-bar presses to determine a personalized audio frame length and saves it dynamically.
 2.  **Stage 2: Passphrase**
     - Input your secret passphrase (or keep the default one).
     - Click **Save Passphrase to config.json**. The GUI will automatically switch to **Stage 3**.
