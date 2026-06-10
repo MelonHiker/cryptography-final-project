@@ -3,7 +3,7 @@
   "dataset_path": "dataset.csv",
   "model_path": "model.pkl",
   "scaler_path": "scaler.pkl",
-  "threshold": -0.008142403120763642,
+  "threshold": -0.4529412890877551,
   "seed": 42,
   "summaries": [
     {
@@ -11,39 +11,48 @@
       "attempts": 250,
       "accepted": 0,
       "acceptance_rate": 0.0,
-      "min_score": -1.218543326462982,
-      "mean_score": -0.6614025344637887,
-      "max_score": -0.4188162186552653,
-      "acoustic_mean_score": -1.1396901734681004,
-      "timing_mean_score": -0.023377977164896032,
-      "max_balance": 6.50234027091982,
-      "threshold": -0.008142403120763642
+      "min_score": -4.430943305877561,
+      "mean_score": -3.198118689220156,
+      "max_score": -2.5697382978220404,
+      "acoustic_distance_mean": 23.776561563171235,
+      "timing_distance_mean": 9.197192826921775,
+      "threshold": -0.4529412890877551
     },
     {
       "name": "generative_timing",
       "attempts": 250,
-      "accepted": 1,
-      "acceptance_rate": 0.004,
-      "min_score": -0.7391143997006329,
-      "mean_score": -0.09987226362255189,
-      "max_score": 0.14989913082798756,
-      "acoustic_mean_score": -0.077773004493959,
-      "timing_mean_score": -1.1405231185773177,
-      "max_balance": 43.66438011658102,
-      "threshold": -0.008142403120763642
+      "accepted": 250,
+      "acceptance_rate": 1.0,
+      "min_score": -0.3276766206605224,
+      "mean_score": -0.0240760222413401,
+      "max_score": 0.15601881964180864,
+      "acoustic_distance_mean": 5.94616632053274,
+      "timing_distance_mean": 1.9887647056286286,
+      "threshold": -0.4529412890877551
     },
     {
       "name": "acoustic_replay",
       "attempts": 250,
-      "accepted": 5,
-      "acceptance_rate": 0.02,
-      "min_score": -0.40077115793675455,
-      "mean_score": 0.03993163535183248,
-      "max_score": 0.21765391375004772,
-      "acoustic_mean_score": 0.14149595246223773,
-      "timing_mean_score": -2.4477428410595814,
-      "max_balance": 40.89264741060584,
-      "threshold": -0.008142403120763642
+      "accepted": 250,
+      "acceptance_rate": 1.0,
+      "min_score": -0.23828632267502026,
+      "mean_score": 0.09369944645985649,
+      "max_score": 0.18999392976574003,
+      "acoustic_distance_mean": 5.983518180061946,
+      "timing_distance_mean": 3.013962748665791,
+      "threshold": -0.4529412890877551
+    },
+    {
+      "name": "synthetic_acoustic",
+      "attempts": 250,
+      "accepted": 250,
+      "acceptance_rate": 1.0,
+      "min_score": -0.09994703638043045,
+      "mean_score": 0.15338639851700098,
+      "max_score": 0.2123010502998961,
+      "acoustic_distance_mean": 3.582313138892179,
+      "timing_distance_mean": 2.2700599406499222,
+      "threshold": -0.4529412890877551
     }
   ]
 }

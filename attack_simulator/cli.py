@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from .simulation import ATTACK_GENERATORS, format_result, run_simulation, save_result
+from .simulation import ATTACK_GENERATORS, REALISM_PROFILES, format_result, run_simulation, save_result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,6 +14,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=None, help="Override auth threshold.")
     parser.add_argument("--attempts", type=int, default=250, help="Attempts per attack.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument(
+        "--realism",
+        choices=sorted(REALISM_PROFILES),
+        default="practical",
+        help="Attack realism profile. practical is the default.",
+    )
     parser.add_argument(
         "--attack",
         action="append",
@@ -34,6 +40,7 @@ def main() -> None:
         attempts=args.attempts,
         threshold=args.threshold,
         seed=args.seed,
+        realism=args.realism,
         attack_names=args.attack,
     )
     print(format_result(result))

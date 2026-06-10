@@ -13,10 +13,8 @@ from .features import extract_46_features
 from .modeling import (
     append_feature_row,
     calibrate_auth_threshold,
-    evaluate_with_artifacts,
     load_feature_matrix,
     save_artifacts,
-    score_with_artifacts,
     train_one_class_model,
 )
 from .otp import generate_otp, send_otp_email
@@ -36,8 +34,11 @@ class KeystrokeAuthApp:
         self.feature_preview_var = None
         self.feature_output = None
         self.calibration_active = False
-        self.calibration_press_target = 3
+        self.calibration_press_target = 7
+        self.calibration_press_cooldown_sec = 0.8
         self.calibration_press_times: list[float] = []
+        self.calibration_started_at = 0.0
+        self.calibration_audio_ready = False
         self.calibration_stop_event = None
         self.calibration_thread = None
         self.calibration_notice_var = None
@@ -55,6 +56,7 @@ class KeystrokeAuthApp:
         self.collection_capture_stop_event = None
         self.collection_capture_thread = None
         self.collection_capture_started_at = 0.0
+        self.collection_capture_audio_ready = False
         self.collection_capture_timestamps: list[float] = []
         self.collection_capture_previous_length = 0
         self.collection_expected_text = ""
@@ -85,6 +87,7 @@ class KeystrokeAuthApp:
         self.capture_timestamps: list[float] = []
         self.capture_previous_length = 0
         self.capture_started_at = 0.0
+        self.capture_audio_ready = False
         self.capture_audio = None
         self.capture_audio_stop_event = None
         self.capture_audio_thread = None
@@ -200,7 +203,7 @@ class KeystrokeAuthApp:
             ctk,
             parent,
             "Stage 1 Calibration",
-            "Press the space bar 3 times with a normal force. The app will estimate the fixed key-sound length L and persist it in config.json.",
+            "Press the space bar 7 times with a normal force. Wait for the cooldown between presses. The app will estimate the fixed key-sound length L and persist it in config.json.",
         )
 
         self.calibration_sample_rate_var = ctk.StringVar(value=str(self.config.sample_rate))
@@ -545,7 +548,6 @@ class KeystrokeAuthApp:
 
     def _evaluate_model(self) -> None:
         from keystroke_auth.modeling import (
-            evaluate_with_artifacts,
             load_artifacts,
             load_feature_matrix,
             score_with_artifacts,
@@ -586,25 +588,8 @@ class KeystrokeAuthApp:
                 self.eval_threshold_var.set(f"{threshold:.6f}")
             save_config(self.config, self.config_path)
 
-            owner_preds = [
-                1 if evaluate_with_artifacts(artifacts, row, threshold)["accepted"] else -1
-                for row in owner_matrix
-            ]
-            imposter_preds = [
-                1 if evaluate_with_artifacts(artifacts, row, threshold)["accepted"] else -1
-                for row in imposter_matrix
-            ]
-
-            actual_far = (
-                sum(1 for prediction in imposter_preds if prediction == 1) / len(imposter_preds)
-                if imposter_preds
-                else 0.0
-            )
-            actual_frr = (
-                sum(1 for prediction in owner_preds if prediction == -1) / len(owner_preds)
-                if owner_preds
-                else 0.0
-            )
+            owner_preds = [1 if score > threshold else -1 for score in owner_scores]
+            imposter_preds = [1 if score > threshold else -1 for score in imposter_scores]
 
             total_samples = len(owner_preds) + len(imposter_preds)
             correct = sum(1 for p in owner_preds if p == 1) + sum(
@@ -618,11 +603,8 @@ class KeystrokeAuthApp:
                 f"Owner Samples (True Positives targeted): {len(owner_preds)}\n"
                 f"Imposter Samples (True Negatives targeted): {len(imposter_preds)}\n\n"
                 f"AUTH_THRESHOLD: {threshold:.6f}\n"
-                f"Security Gates: joint + acoustic + timing + balance\n"
-                f"Joint Threshold FAR: {far * 100:.2f}%\n"
-                f"Joint Threshold FRR: {frr * 100:.2f}%\n"
-                f"Gated FAR (False Acceptance Rate): {actual_far * 100:.2f}%\n"
-                f"Gated FRR (False Rejection Rate): {actual_frr * 100:.2f}%\n"
+                f"FAR (False Acceptance Rate): {far * 100:.2f}%\n"
+                f"FRR (False Rejection Rate): {frr * 100:.2f}%\n"
                 f"Overall Accuracy: {accuracy * 100:.2f}%\n"
             )
             self.eval_results_var.set(results)
@@ -952,6 +934,7 @@ class KeystrokeAuthApp:
         self.collection_capture_keysyms = []
         self.collection_capture_previous_length = 0
         self.collection_capture_started_at = perf_counter()
+        self.collection_capture_audio_ready = False
         self.collection_expected_text = self.config.passphrase.strip()
 
         if self.collection_progress_var is not None:
@@ -972,7 +955,7 @@ class KeystrokeAuthApp:
         if self.collection_input_var is not None:
             self.collection_input_var.set("")
         if self.collection_input_entry is not None:
-            self.collection_dialog.after_idle(self.collection_input_entry.focus_set)
+            self.collection_input_entry.configure(state="disabled")
         if self.collection_continue_button is not None:
             self.collection_continue_button.pack_forget()
 
@@ -987,6 +970,7 @@ class KeystrokeAuthApp:
 
             def set_start():
                 self.collection_capture_started_at = perf_counter()
+                self.collection_capture_audio_ready = True
 
             if self.collection_capture_stop_event is not None:
                 self.collection_capture_audio = recorder.record_until(
@@ -997,6 +981,7 @@ class KeystrokeAuthApp:
 
         self.collection_capture_thread = Thread(target=audio_task, daemon=True)
         self.collection_capture_thread.start()
+        self._enable_collection_input_when_audio_ready()
 
         if self.collection_dialog is not None:
             self.collection_dialog.unbind_all("<KeyPress>")
@@ -1067,6 +1052,18 @@ class KeystrokeAuthApp:
         self.collection_session_sample_count = 0
         self._begin_bulk_sample()
 
+    def _enable_collection_input_when_audio_ready(self) -> None:
+        if not self.collection_active or self.collection_input_entry is None:
+            return
+
+        if getattr(self, "collection_capture_audio_ready", False):
+            self.collection_input_entry.configure(state="normal")
+            self.collection_input_entry.focus_set()
+            return
+
+        if self.root is not None:
+            self.root.after(10, self._enable_collection_input_when_audio_ready)
+
     def _augment_training_audio(self, audio: np.ndarray) -> np.ndarray:
         noise_std = float(getattr(self.config, "white_noise_std", self.collection_noise_std))
         if audio.size == 0 or noise_std <= 0.0:
@@ -1116,6 +1113,9 @@ class KeystrokeAuthApp:
         if not self.collection_active or self.collection_input_var is None:
             return
 
+        if not getattr(self, "collection_capture_audio_ready", False):
+            return
+
         if self._is_valid_biometric_key(event):
             self.collection_capture_timestamps.append(perf_counter())
             self.collection_capture_keysyms.append(event.keysym)
@@ -1151,6 +1151,7 @@ class KeystrokeAuthApp:
                 self.config.key_length,
                 self.config.histogram_bins,
                 keysyms=self.collection_capture_keysyms,
+                expected_key_count=len(self.collection_expected_text),
             )
             append_feature_row(target_path, features)
         except Exception as exc:
@@ -1196,14 +1197,16 @@ class KeystrokeAuthApp:
         self.capture_active = True
         self.capture_timestamps = []
         self.capture_expected_text = expected_text.strip()
+        self.capture_mode = mode
         self.capture_timestamps = []
         self.capture_keysyms = []
         self.capture_started_at = perf_counter()
         self.capture_previous_length = 0
+        self.capture_audio_ready = False
         self.capture_success_callback = on_success
         self.capture_error_callback = on_error
         self.capture_input_var.set("")
-        self.capture_input_entry.focus_set()
+        self.capture_input_entry.configure(state="disabled")
         if initial_status is not None:
             self._set_status(initial_status)
         else:
@@ -1217,6 +1220,8 @@ class KeystrokeAuthApp:
             _import_pyaudio()
         except DependencyError as exc:
             self.capture_active = False
+            if self.capture_input_entry is not None:
+                self.capture_input_entry.configure(state="normal")
             self._set_status(f"Stage 2 needs microphone permission and pyaudio. Detail: {exc}")
             return
 
@@ -1229,6 +1234,7 @@ class KeystrokeAuthApp:
 
             def set_start():
                 self.capture_started_at = perf_counter()
+                self.capture_audio_ready = True
 
             recorder = AudioRecorder(sample_rate=self.config.sample_rate)
             if self.capture_audio_stop_event is not None:
@@ -1240,9 +1246,22 @@ class KeystrokeAuthApp:
         self.capture_audio = None
         self.capture_audio_thread = Thread(target=audio_task, daemon=True)
         self.capture_audio_thread.start()
+        self._enable_capture_input_when_audio_ready()
 
         self.root.bind_all("<KeyPress>", self._on_capture_key_press, add="+")
         self.root.bind_all("<KeyRelease>", self._on_capture_key_release, add="+")
+
+    def _enable_capture_input_when_audio_ready(self) -> None:
+        if not self.capture_active or self.capture_input_entry is None:
+            return
+
+        if getattr(self, "capture_audio_ready", False):
+            self.capture_input_entry.configure(state="normal")
+            self.capture_input_entry.focus_set()
+            return
+
+        if self.root is not None:
+            self.root.after(10, self._enable_capture_input_when_audio_ready)
 
     def _finalize_text_capture(self) -> None:
         if not self.capture_active:
@@ -1290,6 +1309,7 @@ class KeystrokeAuthApp:
                 self.config.key_length,
                 self.config.histogram_bins,
                 keysyms=self.capture_keysyms,
+                expected_key_count=len(expected_text),
             )
             return features
 
@@ -1335,6 +1355,9 @@ class KeystrokeAuthApp:
         if not self.capture_active or self.capture_input_var is None:
             return
 
+        if not getattr(self, "capture_audio_ready", False):
+            return
+
         if event.widget != self.capture_input_entry and event.widget != getattr(self.capture_input_entry, "_entry", None):
             return
 
@@ -1365,7 +1388,10 @@ class KeystrokeAuthApp:
             self._set_status("Sample rate must be a valid integer (e.g., 44100 or 48000).")
             return
 
-        self._set_status("Calibration started. Focus the app and press space 3 times.")
+        self._set_status(
+            f"Calibration started. Focus the app and press space {self.calibration_press_target} times. "
+            f"Wait {self.calibration_press_cooldown_sec:.1f}s between presses."
+        )
 
         try:
             from .capture import _import_pyaudio  # type: ignore
@@ -1379,18 +1405,23 @@ class KeystrokeAuthApp:
 
         self.calibration_active = True
         self.calibration_press_times = []
+        self.calibration_started_at = perf_counter()
+        self.calibration_audio_ready = False
         self.calibration_stop_event = Event()
-
-        started = perf_counter()
 
         def audio_task() -> None:
             from .capture import AudioRecorder  # local import to keep startup light
 
             recorder = AudioRecorder(sample_rate=self.config.sample_rate)
+
+            def set_start() -> None:
+                self.calibration_started_at = perf_counter()
+                self.calibration_audio_ready = True
+
             if self.calibration_stop_event is not None:
-                audio = recorder.record_until(self.calibration_stop_event)
+                audio = recorder.record_until(self.calibration_stop_event, on_start=set_start)
             else:
-                audio = recorder.record_until(Event())
+                audio = recorder.record_until(Event(), on_start=set_start)
             self.calibration_audio = audio
 
         self.calibration_audio = None
@@ -1401,7 +1432,21 @@ class KeystrokeAuthApp:
             if not self.calibration_active or event.keysym != "space":
                 return None
 
-            self.calibration_press_times.append(perf_counter() - started)
+            if not getattr(self, "calibration_audio_ready", False):
+                self._set_status("Microphone is starting. Please wait a moment, then press space.")
+                return "break"
+
+            now = perf_counter()
+            if self.calibration_press_times:
+                elapsed_since_last = now - (
+                    self.calibration_started_at + self.calibration_press_times[-1]
+                )
+                if elapsed_since_last < self.calibration_press_cooldown_sec:
+                    remaining = self.calibration_press_cooldown_sec - elapsed_since_last
+                    self._set_status(f"Cooldown: wait {remaining:.1f}s before the next space.")
+                    return "break"
+
+            self.calibration_press_times.append(now - self.calibration_started_at)
             count = len(self.calibration_press_times)
             self._set_status(f"Calibration press {count}/{self.calibration_press_target}")
 
@@ -1419,7 +1464,7 @@ class KeystrokeAuthApp:
         self.calibration_active = False
         self.root.unbind("<KeyPress-space>")
 
-        def finalize() -> None:
+        def finalize():
             if self.calibration_stop_event is not None:
                 self.calibration_stop_event.set()
             if self.calibration_thread is not None:
@@ -1438,14 +1483,16 @@ class KeystrokeAuthApp:
             return calibration
 
         try:
-            finalize()
+            calibration = finalize()
         except Exception as exc:
             self._set_status(f"Calibration failed: {exc}")
             return
 
         self._switch_to_passphrase_tab()
+        per_press = ", ".join(str(length) for length in calibration.per_press_lengths)
         message = (
-            "Calibration complete. config.json has been written. "
+            f"Calibration complete. key_length={calibration.key_length} "
+            f"(per press: {per_press}). config.json has been written. "
             "Please go to Stage 2 Passphrase next."
         )
         if self.calibration_notice_var is not None:
@@ -1724,48 +1771,16 @@ class KeystrokeAuthApp:
             self.config.auth_threshold = threshold
             save_config(self.config, self.config_path)
 
-            evaluation = evaluate_with_artifacts(self.model_loaded, features, threshold=threshold)
-            scores = evaluation["scores"]
-            score = float(scores["joint"])
-            acoustic_score = scores.get("acoustic")
-            timing_score = scores.get("timing")
-            balance_score = scores.get("balance")
-            threshold_map = evaluation["thresholds"]
+            from keystroke_auth.modeling import score_with_artifacts
 
-            print(
-                "Model decision scores: "
-                f"joint={score:.6f} (threshold: {threshold_map['joint']:.6f}), "
-                f"acoustic={acoustic_score:.6f} "
-                f"(threshold: {threshold_map.get('acoustic', float('-inf')):.6f})"
-                if acoustic_score is not None
-                else f"Model decision score: joint={score:.6f} (threshold: {threshold_map['joint']:.6f})"
-            )
+            score = score_with_artifacts(self.model_loaded, features)
+            # print numeric score to terminal for debugging/inspection
+            print(f"Model decision score: {score:.6f} (threshold: {threshold:.6f})")
             if hasattr(self, "auth_dialog_status_var") and self.auth_dialog_status_var is not None:
-                parts = [f"joint {score:.4f}/{threshold_map['joint']:.4f}"]
-                if acoustic_score is not None:
-                    parts.append(
-                        f"acoustic {acoustic_score:.4f}/{threshold_map.get('acoustic', float('-inf')):.4f}"
-                    )
-                if timing_score is not None:
-                    parts.append(
-                        f"timing {timing_score:.4f}/{threshold_map.get('timing', float('-inf')):.4f}"
-                    )
-                if balance_score is not None and "balance_max" in threshold_map:
-                    parts.append(
-                        f"balance {balance_score:.4f}<={threshold_map['balance_max']:.4f}"
-                    )
-                self.auth_dialog_status_var.set(" | ".join(parts))
+                self.auth_dialog_status_var.set(f"Score: {score:.6f} (threshold {threshold:.6f})")
+            self._set_status(f"Model score: {score:.6f} (threshold {threshold:.6f})")
 
-            status_parts = [f"joint={score:.6f}"]
-            if acoustic_score is not None:
-                status_parts.append(f"acoustic={acoustic_score:.6f}")
-            if timing_score is not None:
-                status_parts.append(f"timing={timing_score:.6f}")
-            if balance_score is not None:
-                status_parts.append(f"balance={balance_score:.6f}")
-            self._set_status("Model scores: " + ", ".join(status_parts))
-
-            prediction = 1 if evaluation["accepted"] else -1
+            prediction = 1 if score > threshold else -1
         except Exception as exc:
             self._set_status(f"Prediction failed: {exc}")
             if self.capture_input_entry is not None:
@@ -1780,7 +1795,6 @@ class KeystrokeAuthApp:
             self._set_status("Login successful.")
             return
 
-        failure_text = ", ".join(evaluation["failures"]) if evaluation["failures"] else "joint"
         self._set_status("Model rejected input. Enabling 2FA...")
         self.pending_otp = generate_otp(self.config.otp_digits)
 
@@ -1793,8 +1807,7 @@ class KeystrokeAuthApp:
 
         def on_success(_) -> None:
             self._set_status(
-                f"Model rejected input on {failure_text}. OTP interface opened. "
-                "(Check terminal if in Test Mode)"
+                "Model rejected input. OTP interface opened. (Check terminal if in Test Mode)"
             )
 
         def on_error(exc) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Thread
 
-from .simulation import format_result, run_simulation, save_result
+from .simulation import REALISM_PROFILES, format_result, run_simulation, save_result
 
 
 class AttackSimulationApp:
@@ -22,6 +22,7 @@ class AttackSimulationApp:
         self.threshold_var = ctk.StringVar(value="")
         self.attempts_var = ctk.StringVar(value="250")
         self.seed_var = ctk.StringVar(value="42")
+        self.realism_var = ctk.StringVar(value="practical")
         self.output_var = ctk.StringVar(value="attack_simulation_report.json")
         self.status_var = ctk.StringVar(value="Ready.")
         self.result_text = None
@@ -68,6 +69,16 @@ class AttackSimulationApp:
         form.grid_columnconfigure(0, weight=1)
         form.grid_columnconfigure(1, weight=1)
 
+        realism_frame = ctk.CTkFrame(body, fg_color="transparent")
+        realism_frame.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkLabel(realism_frame, text="Attack Realism", anchor="w").pack(side="left")
+        ctk.CTkOptionMenu(
+            realism_frame,
+            variable=self.realism_var,
+            values=list(sorted(REALISM_PROFILES)),
+            width=180,
+        ).pack(side="left", padx=(10, 0))
+
         actions = ctk.CTkFrame(body, fg_color="transparent")
         actions.pack(fill="x", padx=16, pady=(0, 12))
         ctk.CTkButton(actions, text="Run Simulations", command=self._run_clicked).pack(side="left")
@@ -103,6 +114,7 @@ class AttackSimulationApp:
             threshold=threshold,
             attempts=int(self.attempts_var.get().strip()),
             seed=int(self.seed_var.get().strip()),
+            realism=self.realism_var.get().strip(),
         )
 
     def _run_clicked(self) -> None:
