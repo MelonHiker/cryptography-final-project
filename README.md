@@ -129,7 +129,7 @@ The application state is entirely managed locally in `config.json`. Do not check
 
 ## ?? Attack Simulation & Validation
 
-This project also includes an independent attack-simulation toolkit for validating how well the trained authentication model resists automated spoofing attempts while still preserving the original **keystroke-acoustic analysis** workflow.
+This project also includes an independent attack-simulation toolkit for validating how well the trained authentication model resists weak black-box Hydra-style spoofing attempts while still preserving the original **keystroke-acoustic analysis** workflow. These simulations do not assume access to the model internals, do not use owner training distributions to generate attacks, and do not use acoustic replay recordings.
 
 ### ?? Launch the Independent Attack-Simulation GUI
 
@@ -146,12 +146,12 @@ The GUI reads the following artifacts by default:
 - `scaler.pkl`
 - `config.json`
 
-It then runs the built-in attack scenarios and summarizes:
+It then runs the built-in black-box Hydra-style attack scenarios and summarizes:
 
 - **Accepted attempts**
 - **Acceptance rate**
 - **Joint model score range**
-- **Acoustic / timing sub-score statistics**
+- **Acoustic / timing feature-distance statistics**
 
 ---
 
@@ -168,14 +168,20 @@ This runs all supported attacks and saves the report locally.
 To run only a specific attack:
 
 ```bash
-python -m attack_simulator.cli --attack generative_timing --attempts 250 --output generative_timing_report.csv
+python -m attack_simulator.cli --attack hydra_humanized_timing --attempts 250 --output hydra_humanized_report.csv
 ```
 
 Available attack names include:
 
-- `hydra_equivalent`
-- `generative_timing`
-- `acoustic_replay`
+- `hydra_scripted_burst`
+- `hydra_humanized_timing`
+- `hydra_synthetic_keyboard`
+
+You can also select the realism profile:
+
+```bash
+python -m attack_simulator.cli --realism casual --attempts 250
+```
 
 ---
 

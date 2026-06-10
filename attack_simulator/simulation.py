@@ -17,39 +17,58 @@ TOTAL_TIME_INDEX = 45
 
 REALISM_PROFILES = {
     "casual": {
-        "timing_mix": 0.3,
-        "timing_cov_scale": 2.0,
-        "timing_shift": 0.2,
-        "acoustic_mix": 0.2,
-        "acoustic_cov_scale": 2.3,
-        "channel_noise": 0.22,
-        "energy_reuse_prob": 0.1,
-        "key_count_noise": 1.6,
-        "total_time_scale": 1.8,
+        "timing_jitter": 0.58,
+        "timing_shift": 0.18,
+        "acoustic_noise": 0.30,
+        "prototype_mix": 0.24,
+        "energy_noise": 0.22,
+        "tempo_control": 0.28,
+        "hydra_humanization": 0.20,
+        "hydra_speed": 0.48,
     },
     "practical": {
-        "timing_mix": 0.48,
-        "timing_cov_scale": 1.45,
-        "timing_shift": 0.1,
-        "acoustic_mix": 0.4,
-        "acoustic_cov_scale": 1.6,
-        "channel_noise": 0.12,
-        "energy_reuse_prob": 0.32,
-        "key_count_noise": 0.85,
-        "total_time_scale": 1.3,
-    },
-    "idealized": {
-        "timing_mix": 0.72,
-        "timing_cov_scale": 1.0,
-        "timing_shift": 0.03,
-        "acoustic_mix": 0.68,
-        "acoustic_cov_scale": 1.0,
-        "channel_noise": 0.04,
-        "energy_reuse_prob": 0.78,
-        "key_count_noise": 0.25,
-        "total_time_scale": 1.05,
+        "timing_jitter": 0.36,
+        "timing_shift": 0.09,
+        "acoustic_noise": 0.18,
+        "prototype_mix": 0.40,
+        "energy_noise": 0.13,
+        "tempo_control": 0.48,
+        "hydra_humanization": 0.35,
+        "hydra_speed": 0.62,
     },
 }
+
+# Broad public priors for keyboard-click MFCC-like shapes. They are intentionally
+# generic and are not estimated from the owner dataset or model internals.
+KEYBOARD_PROTOTYPES = np.array(
+    [
+        [
+            2.4, 1.8, 1.1, 0.6, 0.2, -0.2, -0.6, -0.9,
+            -1.1, -1.2, -1.1, -1.0, -0.9, -0.8, -0.8, -0.7,
+            -0.7, -0.6, -0.5, -0.4, -0.4, -0.3, -0.3, -0.2,
+            -0.2, -0.1, -0.1, 0.0, 0.0, 0.1, 0.1, 0.1,
+        ],
+        [
+            1.7, 1.4, 1.2, 0.9, 0.5, 0.1, -0.2, -0.4,
+            -0.6, -0.8, -0.9, -0.8, -0.7, -0.5, -0.4, -0.3,
+            -0.2, -0.1, -0.1, 0.0, 0.0, 0.1, 0.1, 0.1,
+            0.2, 0.2, 0.2, 0.1, 0.1, 0.0, -0.1, -0.1,
+        ],
+        [
+            2.0, 1.5, 0.8, 0.2, -0.1, -0.3, -0.5, -0.7,
+            -0.8, -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.3,
+            -0.2, -0.2, -0.1, -0.1, -0.1, 0.0, 0.0, 0.1,
+            0.1, 0.0, 0.0, -0.1, -0.1, -0.2, -0.2, -0.3,
+        ],
+    ],
+    dtype=np.float64,
+)
+
+
+@dataclass(slots=True)
+class AttackContext:
+    key_count_hint: float
+    total_time_hint: float
 
 
 @dataclass(slots=True)
@@ -88,18 +107,37 @@ def _profile(name: str) -> dict[str, float]:
     return REALISM_PROFILES[name]
 
 
-def _clip_like_training(samples: np.ndarray, training: np.ndarray) -> np.ndarray:
-    lower = np.percentile(training, 0.5, axis=0)
-    upper = np.percentile(training, 99.5, axis=0)
-    return np.clip(samples, lower, upper)
+def _context_from_passphrase(passphrase: str) -> AttackContext:
+    key_count = float(max(len(passphrase.strip()), 1))
+    # Public typing-speed prior, not owner-derived: roughly 4.5 chars/sec with slack.
+    total_time = max(key_count / 4.5, 0.45)
+    return AttackContext(key_count_hint=key_count, total_time_hint=total_time)
+
+
+def _clip_public_bounds(samples: np.ndarray, context: AttackContext) -> np.ndarray:
+    bounded = samples.copy()
+    bounded[:, MFCC_SLICE] = np.clip(bounded[:, MFCC_SLICE], -8.0, 8.0)
+    bounded[:, ENERGY_SLICE] = np.clip(bounded[:, ENERGY_SLICE], 0.0, 4.0)
+    bounded[:, TIMING_SLICE] = np.clip(bounded[:, TIMING_SLICE], 0.0, 1.0)
+    bounded[:, KEY_COUNT_INDEX] = np.clip(
+        np.round(bounded[:, KEY_COUNT_INDEX]),
+        max(context.key_count_hint - 2.0, 1.0),
+        context.key_count_hint + 2.0,
+    )
+    bounded[:, TOTAL_TIME_INDEX] = np.clip(
+        bounded[:, TOTAL_TIME_INDEX],
+        max(context.total_time_hint * 0.35, 0.15),
+        context.total_time_hint * 2.2,
+    )
+    return bounded
 
 
 def _score_samples(artifacts, samples: np.ndarray, threshold: float) -> tuple[int, np.ndarray]:
     from keystroke_auth.modeling import score_with_artifacts
 
-    joint_scores = np.array([score_with_artifacts(artifacts, row) for row in samples], dtype=np.float64)
-    accepted = int(np.sum(joint_scores > threshold))
-    return accepted, joint_scores
+    scores = np.array([score_with_artifacts(artifacts, row) for row in samples], dtype=np.float64)
+    accepted = int(np.sum(scores > threshold))
+    return accepted, scores
 
 
 def _mean_normalized_distance(
@@ -115,238 +153,174 @@ def _mean_normalized_distance(
     return float(np.mean(np.linalg.norm(zscores, axis=1)))
 
 
-def _apply_channel_mismatch(
-    acoustic_features: np.ndarray,
-    generator: np.random.Generator,
-    severity: float,
-) -> np.ndarray:
-    transformed = acoustic_features.copy()
-    mfcc = transformed[:, MFCC_SLICE]
-    energies = transformed[:, ENERGY_SLICE]
-
-    spectral_tilt = np.linspace(
-        1.0 + severity * 0.12,
-        max(0.55, 1.0 - severity * 0.18),
-        mfcc.shape[1],
-    )
-    mfcc *= spectral_tilt
-    mfcc += generator.normal(0.0, severity * 0.22, size=mfcc.shape)
-    mfcc *= generator.normal(1.0, severity * 0.16, size=(mfcc.shape[0], 1))
-
-    energies *= generator.normal(1.0, severity * 0.18, size=(energies.shape[0], 1))
-    energies += generator.normal(0.0, severity * 0.05, size=energies.shape)
-    energies[:] = np.clip(energies, 0.0, None)
-    return transformed
-
-
-def hydra_equivalent_attack(
-    training: np.ndarray,
+def _generic_keyboard_acoustics(
     attempts: int,
-    seed: int | None = None,
-    realism: str = "practical",
+    generator: np.random.Generator,
+    realism: str,
 ) -> np.ndarray:
-    generator = _rng(seed)
     profile = _profile(realism)
-    mean = np.mean(training, axis=0)
-    std = np.std(training, axis=0)
-    std = np.where(std <= 1e-9, 1e-6, std)
+    prototype_ids = generator.integers(0, len(KEYBOARD_PROTOTYPES), size=attempts)
+    prototypes = KEYBOARD_PROTOTYPES[prototype_ids]
+    secondary = KEYBOARD_PROTOTYPES[generator.integers(0, len(KEYBOARD_PROTOTYPES), size=attempts)]
+    mix = generator.uniform(0.0, profile["prototype_mix"], size=(attempts, 1))
+    mfcc = ((1.0 - mix) * prototypes) + (mix * secondary)
 
-    samples = np.zeros((attempts, training.shape[1]), dtype=np.float64)
-    samples[:, MFCC_SLICE] = generator.normal(
-        0.0, 0.3 + profile["channel_noise"], size=(attempts, MFCC_SLICE.stop - MFCC_SLICE.start)
-    )
-    samples[:, ENERGY_SLICE] = np.abs(
+    tilt = np.linspace(0.18, -0.12, MFCC_SLICE.stop - MFCC_SLICE.start)
+    mfcc += tilt
+    mfcc += generator.normal(0.0, profile["acoustic_noise"], size=mfcc.shape)
+
+    energies = np.abs(
         generator.normal(
-            0.0,
-            0.02 + profile["channel_noise"] * 0.04,
+            loc=0.26,
+            scale=profile["energy_noise"],
             size=(attempts, ENERGY_SLICE.stop - ENERGY_SLICE.start),
         )
     )
-    timing_mean = max(float(mean[TIMING_SLICE.start]), 1e-4)
-    samples[:, TIMING_SLICE] = generator.normal(
-        timing_mean * (0.15 + profile["timing_shift"]),
-        max(float(std[TIMING_SLICE.start]) * (0.08 + profile["timing_shift"]), 1e-4),
+    energy_shape = generator.uniform(0.75, 1.35, size=(attempts, 1))
+    energies *= energy_shape
+    return np.concatenate([mfcc, energies], axis=1)
+
+
+def _feature_aware_timing(
+    attempts: int,
+    generator: np.random.Generator,
+    realism: str,
+    context: AttackContext,
+    style: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    profile = _profile(realism)
+    if style == "scripted":
+        base = np.array([0.055, 0.018, 0.12, 0.01, 0.045, 0.045], dtype=np.float64)
+        spread = np.array([0.018, 0.012, 0.026, 0.008, 0.018, 0.018], dtype=np.float64)
+        total_center = context.total_time_hint * 0.58
+    elif style == "practiced":
+        base = np.array([0.13, 0.08, 0.27, 0.035, 0.11, 0.095], dtype=np.float64)
+        spread = np.array([0.055, 0.04, 0.085, 0.03, 0.045, 0.045], dtype=np.float64)
+        total_center = context.total_time_hint * 1.05
+    else:
+        base = np.array([0.10, 0.06, 0.21, 0.025, 0.085, 0.08], dtype=np.float64)
+        spread = np.array([0.045, 0.035, 0.07, 0.025, 0.04, 0.04], dtype=np.float64)
+        total_center = context.total_time_hint * 1.12
+
+    shift = np.array([0.08, 0.0, 0.12, -0.025, 0.02, 0.01], dtype=np.float64)
+    loc = base + (shift * profile["timing_shift"])
+    scale = spread * (1.0 + profile["timing_jitter"])
+    timing = generator.normal(loc=loc, scale=scale, size=(attempts, TIMING_SLICE.stop - TIMING_SLICE.start))
+    timing = np.clip(timing, 0.0, None)
+
+    tempo_control = profile["tempo_control"]
+    total_time = generator.normal(
+        loc=total_center,
+        scale=max(context.total_time_hint * (0.28 - tempo_control * 0.12), 0.05),
+        size=attempts,
+    )
+    total_time = np.clip(total_time, 0.12, None)
+    return timing, total_time
+
+
+def _hydra_base_attempts(
+    context: AttackContext,
+    attempts: int,
+    generator: np.random.Generator,
+    realism: str = "practical",
+) -> np.ndarray:
+    profile = _profile(realism)
+    acoustic = _generic_keyboard_acoustics(attempts, generator, realism)
+
+    base = np.array([0.045, 0.012, 0.095, 0.008, 0.035, 0.035], dtype=np.float64)
+    spread = np.array([0.012, 0.008, 0.018, 0.006, 0.012, 0.012], dtype=np.float64)
+    timing = generator.normal(
+        loc=base,
+        scale=spread * (1.0 + profile["timing_jitter"] * 0.35),
         size=(attempts, TIMING_SLICE.stop - TIMING_SLICE.start),
     )
-    samples[:, KEY_COUNT_INDEX] = np.round(
-        generator.normal(float(mean[KEY_COUNT_INDEX]), max(profile["key_count_noise"], 0.5), size=attempts)
+    timing = np.clip(timing, 0.0, None)
+
+    total_time = generator.normal(
+        loc=max(context.total_time_hint * profile["hydra_speed"], 0.18),
+        scale=max(context.total_time_hint * 0.06, 0.025),
+        size=attempts,
     )
-    samples[:, TOTAL_TIME_INDEX] = generator.uniform(
-        0.05, 0.35 * profile["total_time_scale"], size=attempts
-    )
-    return samples
+    key_count = generator.normal(context.key_count_hint, 0.18, size=attempts)
+
+    samples = np.zeros((attempts, 46), dtype=np.float64)
+    samples[:, ACOUSTIC_SLICE] = acoustic
+    samples[:, TIMING_SLICE] = timing
+    samples[:, KEY_COUNT_INDEX] = key_count
+    samples[:, TOTAL_TIME_INDEX] = total_time
+    return _clip_public_bounds(samples, context)
 
 
-def generative_timing_attack(
-    training: np.ndarray,
+def hydra_scripted_burst_attack(
+    context: AttackContext,
     attempts: int,
     seed: int | None = None,
     realism: str = "practical",
 ) -> np.ndarray:
+    """Hydra-style burst: fast automated attempts with generic keyboard acoustics."""
+    generator = _rng(seed)
+    samples = _hydra_base_attempts(context, attempts, generator, realism)
+    samples[:, TIMING_SLICE] *= generator.uniform(0.85, 1.18, size=(attempts, 1))
+    samples[:, ENERGY_SLICE] *= generator.uniform(0.75, 1.25, size=(attempts, 1))
+    return _clip_public_bounds(samples, context)
+
+
+def hydra_humanized_timing_attack(
+    context: AttackContext,
+    attempts: int,
+    seed: int | None = None,
+    realism: str = "practical",
+) -> np.ndarray:
+    """Hydra-style automation with coarse human-like pauses added between attempts."""
     generator = _rng(seed)
     profile = _profile(realism)
-    mean = np.mean(training, axis=0)
-
-    timing_cov = np.cov(training[:, TIMING_SLICE], rowvar=False)
-    timing_cov = np.atleast_2d(timing_cov)
-    timing_cov += np.eye(timing_cov.shape[0]) * 1e-6
-
-    acoustic_cov = np.cov(training[:, ACOUSTIC_SLICE], rowvar=False)
-    acoustic_cov = np.atleast_2d(acoustic_cov)
-    acoustic_cov += np.eye(acoustic_cov.shape[0]) * 1e-5
-
-    samples = np.tile(mean, (attempts, 1))
-    acoustic_rows = training[generator.integers(0, training.shape[0], size=attempts), ACOUSTIC_SLICE]
-    acoustic_draw = generator.multivariate_normal(
-        np.mean(training[:, ACOUSTIC_SLICE], axis=0),
-        acoustic_cov * profile["acoustic_cov_scale"],
-        size=attempts,
+    samples = _hydra_base_attempts(context, attempts, generator, realism)
+    human_timing, human_total_time = _feature_aware_timing(
+        attempts, generator, realism, context, "practiced"
     )
-    samples[:, ACOUSTIC_SLICE] = (
-        profile["acoustic_mix"] * acoustic_rows + (1.0 - profile["acoustic_mix"]) * acoustic_draw
+    blend = profile["hydra_humanization"]
+    samples[:, TIMING_SLICE] = ((1.0 - blend) * samples[:, TIMING_SLICE]) + (blend * human_timing)
+    samples[:, TOTAL_TIME_INDEX] = (
+        (1.0 - blend) * samples[:, TOTAL_TIME_INDEX] + blend * human_total_time
     )
-    keep_mask = generator.random(attempts) < profile["energy_reuse_prob"]
-    if np.any(keep_mask):
-        samples[keep_mask, ENERGY_SLICE] = acoustic_rows[keep_mask, ENERGY_SLICE]
-    samples[:, ACOUSTIC_SLICE] = _apply_channel_mismatch(
-        samples[:, ACOUSTIC_SLICE], generator, profile["channel_noise"]
+    samples[:, ACOUSTIC_SLICE] += generator.normal(
+        0.0, profile["acoustic_noise"] * 0.25, size=(attempts, ACOUSTIC_SLICE.stop)
     )
+    return _clip_public_bounds(samples, context)
 
-    timing_rows = training[generator.integers(0, training.shape[0], size=attempts), TIMING_SLICE]
-    timing_draw = generator.multivariate_normal(
-        np.mean(training[:, TIMING_SLICE], axis=0) * (1.0 + profile["timing_shift"]),
-        timing_cov * profile["timing_cov_scale"],
-        size=attempts,
+
+def hydra_synthetic_keyboard_attack(
+    context: AttackContext,
+    attempts: int,
+    seed: int | None = None,
+    realism: str = "practical",
+) -> np.ndarray:
+    """Hydra-style automation with generic synthetic keyboard-click shaping."""
+    generator = _rng(seed)
+    profile = _profile(realism)
+    samples = _hydra_base_attempts(context, attempts, generator, realism)
+    samples[:, MFCC_SLICE] += np.linspace(0.42, -0.30, MFCC_SLICE.stop - MFCC_SLICE.start)
+    samples[:, MFCC_SLICE] += generator.normal(
+        0.0, profile["acoustic_noise"] * 0.35, size=(attempts, MFCC_SLICE.stop)
     )
+    samples[:, ENERGY_SLICE] *= generator.uniform(0.85, 1.55, size=(attempts, 1))
+    synthetic_timing, synthetic_total_time = _feature_aware_timing(
+        attempts, generator, realism, context, "synthetic"
+    )
+    blend = profile["hydra_humanization"] * 0.75
     samples[:, TIMING_SLICE] = (
-        profile["timing_mix"] * timing_rows + (1.0 - profile["timing_mix"]) * timing_draw
+        (1.0 - blend) * samples[:, TIMING_SLICE] + blend * synthetic_timing
     )
-    samples[:, KEY_COUNT_INDEX] = np.round(
-        generator.normal(
-            float(mean[KEY_COUNT_INDEX]),
-            max(float(np.std(training[:, KEY_COUNT_INDEX])) * profile["key_count_noise"], 0.35),
-            size=attempts,
-        )
+    samples[:, TOTAL_TIME_INDEX] = (
+        (1.0 - blend) * samples[:, TOTAL_TIME_INDEX] + blend * synthetic_total_time
     )
-    samples[:, TOTAL_TIME_INDEX] = generator.normal(
-        float(mean[TOTAL_TIME_INDEX]),
-        max(float(np.std(training[:, TOTAL_TIME_INDEX])) * profile["total_time_scale"], 1e-6),
-        size=attempts,
-    )
-    return _clip_like_training(samples, training)
-
-
-def acoustic_replay_attack(
-    training: np.ndarray,
-    attempts: int,
-    seed: int | None = None,
-    realism: str = "practical",
-) -> np.ndarray:
-    generator = _rng(seed)
-    profile = _profile(realism)
-    source_rows = training[generator.integers(0, training.shape[0], size=attempts)]
-    samples = source_rows.copy()
-    samples[:, ACOUSTIC_SLICE] = _apply_channel_mismatch(
-        samples[:, ACOUSTIC_SLICE], generator, profile["channel_noise"]
-    )
-
-    timing_mean = np.mean(training[:, TIMING_SLICE], axis=0)
-    timing_std = np.std(training[:, TIMING_SLICE], axis=0) + 1e-6
-    samples[:, TIMING_SLICE] = generator.normal(
-        timing_mean
-        * generator.uniform(
-            0.65 - profile["timing_shift"], 1.45 + profile["timing_shift"], size=(attempts, 1)
-        ),
-        timing_std
-        * generator.uniform(0.9, 2.1 * profile["timing_cov_scale"], size=(attempts, 1)),
-    )
-    samples[:, KEY_COUNT_INDEX] = np.round(
-        generator.normal(
-            float(np.mean(training[:, KEY_COUNT_INDEX])),
-            max(float(np.std(training[:, KEY_COUNT_INDEX])) * profile["key_count_noise"], 0.4),
-            size=attempts,
-        )
-    )
-    samples[:, TOTAL_TIME_INDEX] = generator.normal(
-        float(np.mean(training[:, TOTAL_TIME_INDEX]))
-        * generator.uniform(
-            0.65 - profile["timing_shift"], 1.45 + profile["timing_shift"], size=attempts
-        ),
-        float(np.std(training[:, TOTAL_TIME_INDEX])) * profile["total_time_scale"] + 1e-6,
-        size=attempts,
-    )
-    return _clip_like_training(samples, training)
-
-
-def synthetic_acoustic_attack(
-    training: np.ndarray,
-    attempts: int,
-    seed: int | None = None,
-    realism: str = "practical",
-) -> np.ndarray:
-    generator = _rng(seed)
-    profile = _profile(realism)
-    samples = np.zeros((attempts, training.shape[1]), dtype=np.float64)
-
-    acoustic_reference = training[:, ACOUSTIC_SLICE]
-    acoustic_mean = np.mean(acoustic_reference, axis=0)
-    acoustic_covariance = np.cov(acoustic_reference, rowvar=False)
-    acoustic_covariance = np.atleast_2d(acoustic_covariance)
-    acoustic_covariance += np.eye(acoustic_covariance.shape[0]) * 1e-5
-
-    source_a = training[generator.integers(0, training.shape[0], size=attempts), ACOUSTIC_SLICE]
-    source_b = training[generator.integers(0, training.shape[0], size=attempts), ACOUSTIC_SLICE]
-    mix = generator.uniform(0.2, 0.8, size=(attempts, 1))
-    prototype_blend = (mix * source_a) + ((1.0 - mix) * source_b)
-    gaussian_component = generator.multivariate_normal(
-        acoustic_mean,
-        acoustic_covariance * profile["acoustic_cov_scale"],
-        size=attempts,
-    )
-    samples[:, ACOUSTIC_SLICE] = (
-        profile["acoustic_mix"] * prototype_blend
-        + (1.0 - profile["acoustic_mix"]) * gaussian_component
-    )
-    samples[:, ACOUSTIC_SLICE] = _apply_channel_mismatch(
-        samples[:, ACOUSTIC_SLICE], generator, profile["channel_noise"]
-    )
-
-    timing_reference = training[:, TIMING_SLICE]
-    timing_mean = np.mean(timing_reference, axis=0)
-    timing_covariance = np.cov(timing_reference, rowvar=False)
-    timing_covariance = np.atleast_2d(timing_covariance)
-    timing_covariance += np.eye(timing_covariance.shape[0]) * 1e-6
-    samples[:, TIMING_SLICE] = generator.multivariate_normal(
-        timing_mean * (1.0 + profile["timing_shift"]),
-        timing_covariance * max(1.35, profile["timing_cov_scale"]),
-        size=attempts,
-    )
-
-    key_count_mean = float(np.mean(training[:, KEY_COUNT_INDEX]))
-    key_count_std = max(float(np.std(training[:, KEY_COUNT_INDEX])), 1e-6)
-    samples[:, KEY_COUNT_INDEX] = np.round(
-        generator.normal(
-            key_count_mean,
-            max(key_count_std * profile["key_count_noise"], 0.35),
-            size=attempts,
-        )
-    )
-
-    total_time_mean = float(np.mean(training[:, TOTAL_TIME_INDEX]))
-    total_time_std = max(float(np.std(training[:, TOTAL_TIME_INDEX])), 1e-6)
-    samples[:, TOTAL_TIME_INDEX] = generator.normal(
-        total_time_mean,
-        total_time_std * max(1.25, profile["total_time_scale"]),
-        size=attempts,
-    )
-    return _clip_like_training(samples, training)
+    return _clip_public_bounds(samples, context)
 
 
 ATTACK_GENERATORS = {
-    "hydra_equivalent": hydra_equivalent_attack,
-    "generative_timing": generative_timing_attack,
-    "acoustic_replay": acoustic_replay_attack,
-    "synthetic_acoustic": synthetic_acoustic_attack,
+    "hydra_scripted_burst": hydra_scripted_burst_attack,
+    "hydra_humanized_timing": hydra_humanized_timing_attack,
+    "hydra_synthetic_keyboard": hydra_synthetic_keyboard_attack,
 }
 
 
@@ -371,6 +345,7 @@ def run_simulation(
 
     config = load_config(config_path)
     threshold_value = float(config.auth_threshold if threshold is None else threshold)
+    context = _context_from_passphrase(config.passphrase)
     training = load_feature_matrix(dataset_path)
     if training.shape[0] == 0:
         raise ValueError(f"Training dataset is empty: {dataset_path}")
@@ -382,7 +357,7 @@ def run_simulation(
     for index, name in enumerate(selected_attacks):
         if name not in ATTACK_GENERATORS:
             raise ValueError(f"Unknown attack simulation: {name}")
-        samples = ATTACK_GENERATORS[name](training, attempts, seed + index, realism=realism)
+        samples = ATTACK_GENERATORS[name](context, attempts, seed + index, realism=realism)
         accepted, scores = _score_samples(artifacts, samples, threshold_value)
         summaries.append(
             AttackSummary(
