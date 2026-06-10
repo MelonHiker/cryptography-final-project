@@ -124,3 +124,73 @@ Due to the nature of high-dimensional feature spaces (46-D) and typical small sa
 ## 📝 Configuration File (`config.json`)
 
 The application state is entirely managed locally in `config.json`. Do not check this file into Git repositories, as it contains sensitive App Passwords.
+
+---
+
+## ?? Attack Simulation & Validation
+
+This project also includes an independent attack-simulation toolkit for validating how well the trained authentication model resists weak black-box Hydra-style spoofing attempts while still preserving the original **keystroke-acoustic analysis** workflow. These simulations do not assume access to the model internals, do not use owner training distributions to generate attacks, and do not use acoustic replay recordings.
+
+### ?? Launch the Independent Attack-Simulation GUI
+
+After you have already collected training data and exported `model.pkl` + `scaler.pkl`, you can launch the standalone validation interface:
+
+```bash
+python run_attack_simulation.py
+```
+
+The GUI reads the following artifacts by default:
+
+- `dataset.csv`
+- `model.pkl`
+- `scaler.pkl`
+- `config.json`
+
+It then runs the built-in black-box Hydra-style attack scenarios and summarizes:
+
+- **Accepted attempts**
+- **Acceptance rate**
+- **Joint model score range**
+- **Acoustic / timing feature-distance statistics**
+
+---
+
+### ?? Run the Attack Script from the Command Line
+
+If you prefer a scriptable workflow, use the CLI entry point:
+
+```bash
+python -m attack_simulator.cli --attempts 250 --output attack_simulation_report.json
+```
+
+This runs all supported attacks and saves the report locally.
+
+To run only a specific attack:
+
+```bash
+python -m attack_simulator.cli --attack hydra_humanized_timing --attempts 250 --output hydra_humanized_report.csv
+```
+
+Available attack names include:
+
+- `hydra_scripted_burst`
+- `hydra_humanized_timing`
+- `hydra_synthetic_keyboard`
+
+You can also select the realism profile:
+
+```bash
+python -m attack_simulator.cli --realism casual --attempts 250
+```
+
+---
+
+### ?? Recommended Validation Workflow
+
+1.  Complete **Stage 1 - Stage 4** in the main GUI and export `dataset.csv`, `model.pkl`, and `scaler.pkl`.
+2.  Run either the standalone GUI (`python run_attack_simulation.py`) or the CLI (`python -m attack_simulator.cli ...`).
+3.  Review the **Acceptance Rate** of each attack scenario.
+4.  If you have updated the model-defense logic, **retrain the model first** before comparing new attack-simulation results.
+
+> [!IMPORTANT]
+> The attack-simulation toolkit evaluates the currently trained artifacts. If `model.pkl` and `scaler.pkl` were produced before a defense update, retrain them in **Stage 4 Modeling** before drawing conclusions from the new report.

@@ -192,6 +192,8 @@ config.json
 model.pkl
 scaler.pkl
 otp_cache.json
+attack_simulation_report.*
+Attack_Simulation_Validation.md
 
 # Cython debug symbols
 cython_debug/
